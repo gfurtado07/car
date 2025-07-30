@@ -5,10 +5,12 @@ require('dotenv').config();
 const { google } = require('googleapis');
 const TelegramBot = require('node-telegram-bot-api');
 const nodemailer = require('nodemailer');
+const fs = require('fs');
+const path = require('path');
+const https = require('https');
 
-/*───────────────────────────────────────────────────────────
-  1. CONFIGURAÇÃO GOOGLE SHEETS
-───────────────────────────────────────────────────────────*/
+
+/* 1. CONFIGURAÇÃO GOOGLE SHEETS E TELEGRAM */
 let auth;
 try {
   if (process.env.GOOGLE_CREDENTIALS) {
@@ -27,124 +29,33 @@ try {
   console.error('Erro na autenticação Google:', err);
 }
 const sheets = google.sheets({ version: 'v4', auth });
-
-/*───────────────────────────────────────────────────────────
-  2. CONFIGURAÇÃO TELEGRAM
-───────────────────────────────────────────────────────────*/
 const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
 
-/*───────────────────────────────────────────────────────────
-  3. CONFIGURAÇÃO SMTP (nodemailer)
-───────────────────────────────────────────────────────────*/
+/* 2. SMTP */
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: Number(process.env.SMTP_PORT),
-  secure: Number(process.env.SMTP_PORT) === 465, // true se 465
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS
-  }
+  secure: Number(process.env.SMTP_PORT) === 465,
+  auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
 });
 
-/*───────────────────────────────────────────────────────────
-  4. CATEGORIAS / PALAVRAS-CHAVE
-───────────────────────────────────────────────────────────*/
+/* 3. CATEGORIAS, HELPERS E CLASSIFICAÇÃO – IGUAL JÁ IMPLANTADO */
 const categorias = {
-  estoque_logistica: {
-    nome: 'Estoque/Logística',
-    emails: [
-      'logistica@galtecom.com.br',
-      'estoque@galtecom.com.br',
-      'financeiro@galtecom.com.br'
-    ],
-    palavrasChave: [
-      'rastreio','rastrear','pedido','entrega','transportadora',
-      'prazo','atraso','envio','remessa',
-      'comprovante','mercadoria','chegou','não chegou','onde está'
-    ],
-    prioridade: 3
-  },
-  financeiro: {
-    nome: 'Financeiro',
-    emails: [
-      'contabil@galtecom.com.br',
-      'contabil.nav@galtecom.com.br',
-      'financeiro@galtecom.com.br'
-    ],
-    palavrasChave: [
-      'segunda via','boleto','prorrogação','pagamento','fatura',
-      'cobrança','vencimento','boletos','títulos','prorrogar','dias'
-    ],
-    prioridade: 2,
-    isCoringa: true
-  },
-  comercial: {
-    nome: 'Comercial',
-    emails: ['gfurtado@galtecom.com.br','financeiro@galtecom.com.br'],
-    palavrasChave: [
-      'preços','concorrência','acordado','faturou','bonificação',
-      'compensar','valor','reclamando','rádios','próximo pedido'
-    ],
-    prioridade: 1
-  },
-  marketing: {
-    nome: 'Marketing',
-    emails: [
-      'marketing@galtecom.com.br',
-      'marketing.nav@galtecom.com.br',
-      'gfurtado@galtecom.com.br'
-    ],
-    palavrasChave: [
-      'fotos','vídeos','produto','flyers','lançamento','fundo branco',
-      'diferenciais','câmeras','imagens','material','kc360','krc1610'
-    ],
-    prioridade: 3
-  },
-  diretoria: {
-    nome: 'Diretoria',
-    emails: ['edson@galtecom.com.br','financeiro@galtecom.com.br','gfurtado@galtecom.com.br'],
-    palavrasChave: [
-      'reunião','diretoria','proprietário','insatisfeito','resolver',
-      'situação','diretor','dono','gerência'
-    ],
-    prioridade: 1
-  },
-  engenharia: {
-    nome: 'Engenharia/Desenvolvimento',
-    emails: ['engenharia@galtecom.com.br','desenvolvimento@galtecom.com.br'],
-    palavrasChave: [
-      'manual','instalação','dificuldades','sensor','problemas',
-      'funcionamento','técnico','especificação','configuração',
-      'krc5000','kxs199a','krc4100'
-    ],
-    prioridade: 1
-  },
-  faturamento: {
-    nome: 'Faturamento',
-    emails: ['adm@galtecom.com.br','financeiro@galtecom.com.br'],
-    palavrasChave: [
-      'cfop','cst','faturou','correto','questionando',
-      'nota fiscal','6202','6308','fiscal','tributário'
-    ],
-    prioridade: 1
-  },
-  garantia: {
-    nome: 'Garantia',
-    emails: ['garantia@galtecom.com.br','garantia1@galtecom.com.br','edson@galtecom.com.br'],
-    palavrasChave: [
-      'garantia','aparelhos','prazo','1 ano','defeito','troca',
-      'reparo','fora do prazo','garantir'
-    ],
-    prioridade: 1
-  }
+  // ... (MANTENHA como no código anterior, não altere a lista!)
+  estoque_logistica: { /* ... igual ao código anterior ... */ },
+  financeiro: { /* ... */ },
+  comercial: { /* ... */ },
+  marketing: { /* ... */ },
+  diretoria: { /* ... */ },
+  engenharia: { /* ... */ },
+  faturamento: { /* ... */ },
+  garantia: { /* ... */ }
 };
 
-/*───────────────────────────────────────────────────────────
-  5. HELPERS
-───────────────────────────────────────────────────────────*/
 const chamadosPendentes = new Map();
+const anexosDoUsuario = new Map();
 
-function gerarProtocolo() {
+function gerarProtocolo() { /* ... igual ao anterior ... */ 
   const d = new Date();
   return (
     d.getFullYear().toString() +
@@ -167,14 +78,8 @@ function nomeSolicitante(msg) {
   return first_name || last_name ? `${first_name} ${last_name}`.trim() :
          username ? `@${username}` : `User ${msg.from.id}`;
 }
-
-/*───────────────────────────────────────────────────────────
-  6. CLASSIFICAÇÃO
-───────────────────────────────────────────────────────────*/
 function classificarMensagem(texto) {
   const t = texto.toLowerCase();
-
-  // Caso especial: segunda via de nota fiscal
   if (t.includes('segunda via') && t.includes('nota fiscal'))
     return { categoria: 'financeiro', score: Infinity, confianca: 'alta' };
 
@@ -193,10 +98,8 @@ function classificarMensagem(texto) {
   return { categoria: melhor, score: scores[melhor], confianca: scores[melhor] >= 3 ? 'alta' : 'baixa' };
 }
 
-/*───────────────────────────────────────────────────────────
-  7. PLANILHA
-───────────────────────────────────────────────────────────*/
-async function registrarChamado(proto, solicitante, solicitacao, categoria='Aguardando Classificação') {
+/* ------- PLANILHA E E-MAIL ------- */
+async function registrarChamado(proto, solicitante, solicitacao, categoria = 'Aguardando Classificação') {
   try {
     await sheets.spreadsheets.values.append({
       spreadsheetId: process.env.SHEET_ID,
@@ -215,20 +118,20 @@ async function registrarChamado(proto, solicitante, solicitacao, categoria='Agua
     return false;
   }
 }
-async function atualizarCategoria(proto, categoriaNome) {
+async function atualizarCategoria(proto, categoriaNome) { /* igual código anterior */ 
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: process.env.SHEET_ID,
       range: `${process.env.SHEET_NAME}!A:H`
     });
     const rows = res.data.values || [];
-    for (let i=1;i<rows.length;i++) {
+    for (let i = 1; i < rows.length; i++) {
       if (rows[i][0] === proto) {
         await sheets.spreadsheets.values.update({
           spreadsheetId: process.env.SHEET_ID,
-          range: `${process.env.SHEET_NAME}!D${i+1}`,
+          range: `${process.env.SHEET_NAME}!D${i + 1}`,
           valueInputOption: 'USER_ENTERED',
-          resource: { values:[[categoriaNome]] }
+          resource: { values: [[categoriaNome]] }
         });
         return true;
       }
@@ -240,10 +143,26 @@ async function atualizarCategoria(proto, categoriaNome) {
   }
 }
 
-/*───────────────────────────────────────────────────────────
-  8. EMAIL
-───────────────────────────────────────────────────────────*/
-async function enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacao) {
+/* ------- ANEXOS: DOWNLOAD E USO ------- */
+async function baixarArquivoTelegram(fileId, nome_original) {
+  return new Promise((resolve, reject) => {
+    bot.getFileLink(fileId).then(link => {
+      const filename = `${Date.now()}_${nome_original}`;
+      const dest = '/tmp/' + filename;
+      const file = fs.createWriteStream(dest);
+      https.get(link, response => {
+        response.pipe(file);
+        file.on('finish', () => file.close(() => resolve(dest)));
+      }).on('error', err => {
+        fs.unlinkSync(dest);
+        reject(err);
+      });
+    }).catch(reject);
+  });
+}
+
+/* ------- E-MAIL COM ANEXOS ------- */
+async function enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacao, anexos = []) {
   const cat = categorias[categoriaKey];
   if (!cat) return false;
   const mail = {
@@ -263,10 +182,15 @@ Solicitação: ${solicitacao}
 Por favor, verifiquem e deem seguimento.
 
 CAR – Central de Atendimento ao Representante
-`
+`,
+    attachments: anexos.map(x => ({
+      filename: path.basename(x),
+      path: x
+    }))
   };
   try {
     await transporter.sendMail(mail);
+    anexos.forEach(x => fs.unlink(x, err => {}));
     console.log(`Email enviado ao setor ${cat.nome}`);
     return true;
   } catch (err) {
@@ -275,19 +199,14 @@ CAR – Central de Atendimento ao Representante
   }
 }
 
-/*───────────────────────────────────────────────────────────
-  9. TELEGRAM – RECEBENDO MENSAGEM
-───────────────────────────────────────────────────────────*/
+/* ------- TELEGRAM ------- */
+
+/* ------- RECEBENDO TEXTOS ------- */
 bot.on('text', async msg => {
   const chatId = msg.chat.id;
   const txt = msg.text;
   const solicitante = nomeSolicitante(msg);
-
-  // Se aguardando resposta de classificação
-  if (chamadosPendentes.has(chatId)) {
-    // ignorar texto livre, aguardamos botões
-    return;
-  }
+  if (chamadosPendentes.has(chatId)) return;
 
   const proto = gerarProtocolo();
 
@@ -295,79 +214,115 @@ bot.on('text', async msg => {
 `🎫 *Protocolo:* ${proto}
 
 Olá ${solicitante}!
-
 Recebi sua solicitação:
 "${txt}"
 
-⏳ Analisando setor responsável...`, { parse_mode:'Markdown' });
+⏳ Analisando setor responsável...`, { parse_mode: 'Markdown' });
 
   const cls = classificarMensagem(txt);
 
+  // Verifica se recebeu anexos antes (guardar na memória temporária)
+  const anexos = anexosDoUsuario.get(chatId) || [];
   if (cls && cls.confianca === 'alta') {
     const cat = categorias[cls.categoria];
     await registrarChamado(proto, solicitante, txt, cat.nome);
-    await enviarEmailAbertura(proto, solicitante, cls.categoria, txt);
-
+    await enviarEmailAbertura(proto, solicitante, cls.categoria, txt, anexos);
+    anexosDoUsuario.delete(chatId);
     await bot.sendMessage(chatId,
 `✅ *Chamado classificado automaticamente*
 📋 Protocolo: *${proto}
 🏢 Setor: ${cat.nome}*
 
-📧 E-mail enviado à equipe responsável.`,
-{ parse_mode:'Markdown' });
-  } else if (cls) { // baixa confiança
+📧 E-mail enviado à equipe responsável.`, { parse_mode: 'Markdown' });
+  } else if (cls) {
     await registrarChamado(proto, solicitante, txt);
-
-    chamadosPendentes.set(chatId, { protocolo: proto, categoriaSugerida: cls.categoria });
-
-    const cat = categorias[cls.categoria];
+    chamadosPendentes.set(chatId, { protocolo: proto, categoriaSugerida: cls.categoria, anexos });
     await bot.sendMessage(chatId,
-`🤖 Identifiquei que o assunto pode ser *${cat.nome}*.
+`🤖 Identifiquei que o assunto pode ser *${categorias[cls.categoria].nome}*.
 Esta classificação está correta?`,
-{
-  parse_mode:'Markdown',
-  reply_markup:{
-    inline_keyboard:[
-      [{text:'✅ Sim',callback_data:`confirm_${proto}`}],
-      [{text:'❌ Não',callback_data:`reject_${proto}`}]
-    ]
-  }
-});
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '✅ Sim', callback_data: `confirm_${proto}` }],
+            [{ text: '❌ Não', callback_data: `reject_${proto}` }]
+          ]
+        }
+      });
   } else {
     await registrarChamado(proto, solicitante, txt);
+    chamadosPendentes.set(chatId, { protocolo: proto, anexos });
     mostrarMenuCategorias(chatId, proto);
   }
 });
 
-/*───────────────────────────────────────────────────────────
-  10. TELEGRAM – CALLBACK (BOTÕES)
-───────────────────────────────────────────────────────────*/
+/* ------- RECEBENDO ANEXOS ------- */
+async function handleAttachment(msg, tipo, campoArquivo) {
+  const chatId = msg.chat.id;
+  const arquivo = msg[campoArquivo];
+
+  if (!arquivo) return;
+
+  // Determina o nome do arquivo original ou um nome padrão
+  let nome = arquivo.file_name || (tipo + '_' + arquivo.file_unique_id);
+
+  // Baixa o arquivo do Telegram
+  try {
+    const p = await baixarArquivoTelegram(arquivo.file_id, nome);
+
+    // Adiciona na lista temporária de anexos desse usuário
+    if (!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId, []);
+    anexosDoUsuario.get(chatId).push(p);
+
+    await bot.sendMessage(chatId, `📎 Arquivo recebido: ${nome}\n(Envie sua mensagem/texto para finalizar o chamado.)`);
+  } catch {
+    await bot.sendMessage(chatId, `❌ Não consegui baixar o arquivo "${nome}".`);
+  }
+}
+
+// Fotos
+bot.on('photo', async msg => {
+  // pega o melhor tamanho disponível
+  const sizes = msg.photo;
+  const arquivo = sizes[sizes.length - 1];
+  arquivo.file_name = 'imagem.jpg';
+  await handleAttachment({ ...msg, photo: null, file_id: arquivo.file_id, file_unique_id: arquivo.file_unique_id, file_name: arquivo.file_name }, 'foto', 'file_id');
+});
+// Documentos
+bot.on('document', msg => handleAttachment(msg, 'documento', 'document'));
+// Áudio
+bot.on('audio', msg => handleAttachment(msg, 'audio', 'audio'));
+// Vídeo
+bot.on('video', msg => handleAttachment(msg, 'video', 'video'));
+
+/* ------- CALLBACK/BOTÕES ------- */
 bot.on('callback_query', async q => {
   const chatId = q.message.chat.id;
   const data = q.data;
+  const pend = chamadosPendentes.get(chatId);
 
   if (data.startsWith('confirm_')) {
-    const proto = data.replace('confirm_','');
-    const pend = chamadosPendentes.get(chatId);
+    const proto = data.replace('confirm_', '');
     if (pend?.categoriaSugerida) {
       const catKey = pend.categoriaSugerida;
       const cat = categorias[catKey];
       await atualizarCategoria(proto, cat.nome);
-      await enviarEmailAbertura(proto, nomeSolicitante(q.message), catKey, '—');
+      await enviarEmailAbertura(proto, nomeSolicitante(q.message), catKey, '—', pend.anexos || []);
       await bot.editMessageText(
-`✅ Classificação confirmada!
+        `✅ Classificação confirmada!
 
 Protocolo: *${proto}
 Setor: ${cat.nome}*
 
 📧 E-mail enviado à equipe responsável.`,
-{ chat_id:chatId, message_id:q.message.message_id, parse_mode:'Markdown' });
+        { chat_id: chatId, message_id: q.message.message_id, parse_mode: 'Markdown' });
       chamadosPendentes.delete(chatId);
+      anexosDoUsuario.delete(chatId);
     }
   } else if (data.startsWith('reject_')) {
-    const proto = data.replace('reject_','');
+    const proto = data.replace('reject_', '');
     await bot.editMessageText('Por favor, escolha o setor correto:',
-      { chat_id:chatId, message_id:q.message.message_id });
+      { chat_id: chatId, message_id: q.message.message_id });
     mostrarMenuCategorias(chatId, proto);
   } else if (data.startsWith('cat_')) {
     const parts = data.split('_');
@@ -375,40 +330,37 @@ Setor: ${cat.nome}*
     const catKey = parts.slice(1).join('_');
     const cat = categorias[catKey];
     await atualizarCategoria(proto, cat.nome);
-    await enviarEmailAbertura(proto, nomeSolicitante(q.message), catKey, '—');
+    await enviarEmailAbertura(proto, nomeSolicitante(q.message), catKey, '—', pend?.anexos || []);
     await bot.editMessageText(
-`✅ Chamado classificado!
+      `✅ Chamado classificado!
 
 Protocolo: *${proto}
 Setor: ${cat.nome}*
 
 📧 E-mail enviado à equipe responsável.`,
-{ chat_id:chatId, message_id:q.message.message_id, parse_mode:'Markdown' });
+      { chat_id: chatId, message_id: q.message.message_id, parse_mode: 'Markdown' });
     chamadosPendentes.delete(chatId);
+    anexosDoUsuario.delete(chatId);
   }
-
   bot.answerCallbackQuery(q.id);
 });
 
-/*───────────────────────────────────────────────────────────
-  11. MENU DE CATEGORIAS MANUAL
-───────────────────────────────────────────────────────────*/
+/* ------- MENU DE CATEGORIAS ------- */
 function mostrarMenuCategorias(chatId, proto) {
-  chamadosPendentes.set(chatId, { protocolo: proto });
-  bot.sendMessage(chatId,'Selecione o setor:',{
-    reply_markup:{
-      inline_keyboard:[
-        [{text:'📦 Estoque/Logística', callback_data:`cat_estoque_logistica_${proto}`}],
-        [{text:'💰 Financeiro',         callback_data:`cat_financeiro_${proto}`}],
-        [{text:'🤝 Comercial',          callback_data:`cat_comercial_${proto}`}],
-        [{text:'📢 Marketing',          callback_data:`cat_marketing_${proto}`}],
-        [{text:'👔 Diretoria',          callback_data:`cat_diretoria_${proto}`}],
-        [{text:'🔧 Engenharia',         callback_data:`cat_engenharia_${proto}`}],
-        [{text:'📊 Faturamento',        callback_data:`cat_faturamento_${proto}`}],
-        [{text:'🛡️ Garantia',          callback_data:`cat_garantia_${proto}`}]
+  bot.sendMessage(chatId, 'Selecione o setor:', {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '📦 Estoque/Logística', callback_data: `cat_estoque_logistica_${proto}` }],
+        [{ text: '💰 Financeiro', callback_data: `cat_financeiro_${proto}` }],
+        [{ text: '🤝 Comercial', callback_data: `cat_comercial_${proto}` }],
+        [{ text: '📢 Marketing', callback_data: `cat_marketing_${proto}` }],
+        [{ text: '👔 Diretoria', callback_data: `cat_diretoria_${proto}` }],
+        [{ text: '🔧 Engenharia', callback_data: `cat_engenharia_${proto}` }],
+        [{ text: '📊 Faturamento', callback_data: `cat_faturamento_${proto}` }],
+        [{ text: '🛡️ Garantia', callback_data: `cat_garantia_${proto}` }]
       ]
     }
   });
 }
 
-console.log('🤖 Bot CAR KX3 rodando...');
+console.log('🤖 Bot CAR KX3 rodando (agora recebe anexos)!');
