@@ -398,4 +398,4 @@ bot.on('document', async msg => {
     const caminho = await baixarArquivoTelegram(doc.file_id, nome);
     if (!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId, []);
     anexosDoUsuario.get(chatId).push(caminho);
-
+  }}
