@@ -398,4 +398,116 @@ bot.on('document', async msg => {
     const caminho = await baixarArquivoTelegram(doc.file_id, nome);
     if (!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId, []);
     anexosDoUsuario.get(chatId).push(caminho);
-  }}
+    await bot.sendMessage(chatId, `📎 Documento recebido! Agora me conte sobre sua solicitação.`);
+  } catch (error) {
+    console.error('Erro ao processar documento:', error);
+    await bot.sendMessage(chatId, '❌ Não consegui processar seu documento. Tente novamente.');
+  }
+});
+
+// Anexos - Áudios
+bot.on('audio', async msg => {
+  const chatId = msg.chat.id;
+  const aud = msg.audio;
+  const nome = aud.file_name || `audio_${aud.file_unique_id}.mp3`;
+  
+  try {
+    const caminho = await baixarArquivoTelegram(aud.file_id, nome);
+    if (!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId, []);
+    anexosDoUsuario.get(chatId).push(caminho);
+    await bot.sendMessage(chatId, `🎵 Áudio recebido! Agora me conte sobre sua solicitação.`);
+  } catch (error) {
+    console.error('Erro ao processar áudio:', error);
+    await bot.sendMessage(chatId, '❌ Não consegui processar seu áudio. Tente novamente.');
+  }
+});
+
+// Anexos - Vídeos
+bot.on('video', async msg => {
+  const chatId = msg.chat.id;
+  const vid = msg.video;
+  const nome = vid.file_name || `video_${vid.file_unique_id}.mp4`;
+  
+  try {
+    const caminho = await baixarArquivoTelegram(vid.file_id, nome);
+    if (!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId, []);
+    anexosDoUsuario.get(chatId).push(caminho);
+    await bot.sendMessage(chatId, `🎬 Vídeo recebido! Agora me conte sobre sua solicitação.`);
+  } catch (error) {
+    console.error('Erro ao processar vídeo:', error);
+    await bot.sendMessage(chatId, '❌ Não consegui processar seu vídeo. Tente novamente.');
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════
+   8. MENU MANUAL (FALLBACK)
+═══════════════════════════════════════════════════════════ */
+
+function mostrarMenuCategorias(chatId) {
+  bot.sendMessage(chatId, '🤖 Para prosseguir, selecione o setor mais adequado para sua solicitação:', {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '📦 Estoque/Logística', callback_data: `manual_estoque_logistica` }],
+        [{ text: '💰 Financeiro', callback_data: `manual_financeiro` }],
+        [{ text: '🤝 Comercial', callback_data: `manual_comercial` }],
+        [{ text: '📢 Marketing', callback_data: `manual_marketing` }],
+        [{ text: '👔 Diretoria', callback_data: `manual_diretoria` }],
+        [{ text: '🔧 Engenharia', callback_data: `manual_engenharia` }],
+        [{ text: '📊 Faturamento', callback_data: `manual_faturamento` }],
+        [{ text: '🛡️ Garantia', callback_data: `manual_garantia` }]
+      ]
+    }
+  });
+}
+
+// Callback para seleção manual
+bot.on('callback_query', async q => {
+  const chatId = q.message.chat.id;
+  const data = q.data;
+  
+  if (data.startsWith('manual_')) {
+    const categoriaKey = data.replace('manual_', '');
+    const cat = categorias[categoriaKey];
+    const solicitante = nomeSolicitante(q.message);
+    const conversa = conversasEmAndamento.get(chatId) || [];
+    const anexos = anexosDoUsuario.get(chatId) || [];
+    
+    if (cat) {
+      const proto = gerarProtocolo();
+      const solicitacaoCompleta = conversa
+        .filter(msg => msg.role === 'user')
+        .map(msg => msg.content)
+        .join(' | ') || 'Seleção manual de categoria';
+      
+      await registrarChamado(proto, solicitante, solicitacaoCompleta, cat.nome);
+      await enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacaoCompleta, anexos);
+      
+      await bot.editMessageText(
+        `✅ *Chamado criado!*\n\n📋 Protocolo: *${proto}*\n🏢 Setor: *${cat.nome}*\n📧 E-mail enviado à equipe responsável.\n\n📱 Guarde este número de protocolo para acompanhar seu chamado.`,
+        { chat_id: chatId, message_id: q.message.message_id, parse_mode: 'Markdown' }
+      );
+      
+      // Limpar estado
+      conversasEmAndamento.delete(chatId);
+      anexosDoUsuario.delete(chatId);
+    }
+  }
+  
+  await bot.answerCallbackQuery(q.id);
+});
+
+/* ═══════════════════════════════════════════════════════════
+   9. INICIALIZAÇÃO
+═══════════════════════════════════════════════════════════ */
+
+console.log('🤖 Bot CAR KX3 com IA iniciado!');
+console.log('🧠 Agente IA integrado com Pareto');
+console.log('✅ Funcionalidades ativas:');
+console.log('   • Conversação inteligente com IA');
+console.log('   • Classificação automática avançada');
+console.log('   • Geração de protocolos únicos');
+console.log('   • Registro na planilha Google Sheets');
+console.log('   • Envio de e-mails com anexos');
+console.log('   • Suporte a fotos, documentos, áudios e vídeos');
+console.log('   • Tratamento inteligente de respostas IA');
+console.log('📞 Aguardando mensagens...');
