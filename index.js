@@ -289,6 +289,51 @@ async function atualizarStatusChamado(proto, novoStatus = "Finalizado") {
   }
 }
 
+async function atualizarRespostaChamado(proto, resposta) {
+  try {
+    // Busca todas as linhas para achar a linha do protocolo
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.SHEET_ID,
+      range: `${process.env.SHEET_NAME}!A:H`,
+    });
+
+    const linhas = res.data.values || [];
+
+    // Encontrar o índice da linha (começando do 0)
+    const linhaIndex = linhas.findIndex(row => row[0] === proto);
+    if (linhaIndex === -1) {
+      console.warn(`Protocolo ${proto} não encontrado na planilha.`);
+      return false;
+    }
+
+    // A coluna da resposta (coluna F) é a 6ª (index 5, 0-based)
+    const colunaResposta = 5;
+
+    // Pega a resposta atual para concatenar com a nova
+    const respostaAtual = linhas[linhaIndex][colunaResposta] || '';
+    const novaResposta = respostaAtual ? 
+      `${respostaAtual}\n\n--- ${dataHoraBR()} ---\n${resposta}` : 
+      `${dataHoraBR()}: ${resposta}`;
+
+    // Atualiza a célula da resposta
+    const rangeAtualizar = `${process.env.SHEET_NAME}!${String.fromCharCode(65 + colunaResposta)}${linhaIndex + 1}`;
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: process.env.SHEET_ID,
+      range: rangeAtualizar,
+      valueInputOption: "USER_ENTERED",
+      resource: { values: [[novaResposta]] }
+    });
+
+    console.log(`Resposta do protocolo ${proto} atualizada na planilha`);
+    return true;
+    
+  } catch (err) {
+    console.error('Erro ao atualizar resposta na planilha:', err);
+    return false;
+  }
+}
+
 async function baixarArquivoTelegram(fileId, nomeOriginal) {
   return new Promise((resolve, reject) => {
     bot.getFileLink(fileId).then(link => {
@@ -688,6 +733,9 @@ function startEmailMonitor() {
                   }
                   
                   if (proto) {
+                    // Atualiza a resposta na planilha
+                    await atualizarRespostaChamado(proto, body);
+                    
                     let targetChat = null;
                     // Procura pelo chat que possui esse protocolo
                     for (const [chatId, protocol] of protocolosRegistrados.entries()) {
@@ -760,4 +808,6 @@ console.log('   • Transcrição de mensagens de voz');
 console.log('   • Fallback manual para abertura de chamados e consulta de protocolo');
 console.log('   • Monitoramento de respostas de e-mail com atualização de chamados');
 console.log('   • Atualização de status para Finalizado no Google Sheets');
+console.log('   • Registro automático de respostas na planilha');
 console.log('📞 Aguardando mensagens...');
+
