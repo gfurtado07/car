@@ -32,7 +32,7 @@ const categorias = {
     emails: ["logistica@galtecom.com.br", "estoque@galtecom.com.br", "financeiro@galtecom.com.br"],
     palavrasChave: [
       "rastreio", "rastrear", "pedido", "entrega", "transportadora", "prazo", "atraso", "envio", "remessa",
-      "comprovante", "mercadoria", "chegou", "não chegou", "onde está", "NF", "nota fiscal", "distribuidora"
+      "comprovante", "mercadoria", "chegou", "não chegou", "onde está", "distribuidora"
     ],
     prioridade: 3
   },
@@ -150,6 +150,13 @@ function obterNomeSolicitante(msg) {
 // Função para classificar mensagem por palavras-chave
 function classificarMensagem(texto) {
   const textoLower = texto.toLowerCase();
+
+  // Caso especial: segunda via de nota fiscal → Financeiro
+  if (textoLower.includes("segunda via") && textoLower.includes("nota fiscal")) {
+    return { categoria: "financeiro", score: Infinity, confianca: "alta" };
+  }
+
+  // ... resto do cálculo de score abaixo
   const scores = {};
   
   // Calcular score para cada categoria
