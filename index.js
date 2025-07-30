@@ -250,6 +250,45 @@ async function registrarChamado(proto, solicitante, solicitacao, categoria = 'Ag
   }
 }
 
+async function atualizarStatusChamado(proto, novoStatus = "Finalizado") {
+  try {
+    // Busca todas as linhas para achar a linha do protocolo
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.SHEET_ID,
+      range: `${process.env.SHEET_NAME}!A:H`,
+    });
+
+    const linhas = res.data.values || [];
+
+    // Encontrar o índice da linha (começando do 0)
+    const linhaIndex = linhas.findIndex(row => row[0] === proto);
+    if (linhaIndex === -1) {
+      console.warn(`Protocolo ${proto} não encontrado na planilha.`);
+      return false;
+    }
+
+    // A coluna do status (coluna G) é a 7ª (index 6, 0-based)
+    const colunaStatus = 6;
+
+    // Atualiza a célula do status
+    const rangeAtualizar = `${process.env.SHEET_NAME}!${String.fromCharCode(65 + colunaStatus)}${linhaIndex + 1}`;
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: process.env.SHEET_ID,
+      range: rangeAtualizar,
+      valueInputOption: "USER_ENTERED",
+      resource: { values: [[novoStatus]] }
+    });
+
+    console.log(`Status do protocolo ${proto} atualizado para "${novoStatus}"`);
+    return true;
+    
+  } catch (err) {
+    console.error('Erro ao atualizar status na planilha:', err);
+    return false;
+  }
+}
+
 async function baixarArquivoTelegram(fileId, nomeOriginal) {
   return new Promise((resolve, reject) => {
     bot.getFileLink(fileId).then(link => {
@@ -539,9 +578,14 @@ bot.on('callback_query', async q => {
   
   if (data.startsWith('finalizar_')) {
     const proto = data.replace('finalizar_', '');
-    // Aqui você pode implementar uma lógica para atualizar o status do chamado para "Finalizado" no Google Sheets, se desejar.
-    await bot.sendMessage(chatId, `✅ Seu chamado de protocolo ${proto} foi finalizado. Obrigado por utilizar o CAR!`);
-    protocolosRegistrados.delete(chatId); // Remove da lista de chamados abertos
+    const sucesso = await atualizarStatusChamado(proto, "Finalizado");
+
+    if (sucesso) {
+      await bot.sendMessage(chatId, `✅ Seu chamado de protocolo ${proto} foi finalizado. Obrigado por utilizar o CAR!`);
+      protocolosRegistrados.delete(chatId); // Remove da lista de chamados abertos
+    } else {
+      await bot.sendMessage(chatId, `❌ Não consegui atualizar o status do protocolo ${proto}. Por favor, tente novamente mais tarde.`);
+    }
   } else if (data.startsWith('mais_')) {
     const proto = data.replace('mais_', '');
     await bot.sendMessage(chatId, `🔄 O chamado de protocolo ${proto} permanecerá aberto. Por favor, envie os detalhes adicionais que deseja incluir.`);
@@ -715,4 +759,5 @@ console.log('   • Suporte a fotos, documentos, áudios e vídeos');
 console.log('   • Transcrição de mensagens de voz');
 console.log('   • Fallback manual para abertura de chamados e consulta de protocolo');
 console.log('   • Monitoramento de respostas de e-mail com atualização de chamados');
+console.log('   • Atualização de status para Finalizado no Google Sheets');
 console.log('📞 Aguardando mensagens...');
