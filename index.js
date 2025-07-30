@@ -59,35 +59,35 @@ const PARETO_AGENT_ID = process.env.PARETO_AGENT_ID;
 const categorias = {
   estoque_logistica: {
     nome: 'Estoque/Logística',
-    emails: ['logistica@galtecom.com.br', 'estoque@galtecom.com.br', 'financeiro@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br']
   },
   financeiro: {
     nome: 'Financeiro',
-    emails: ['contabil@galtecom.com.br', 'contabil.nav@galtecom.com.br', 'financeiro@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br']
   },
   comercial: {
     nome: 'Comercial',
-    emails: ['gfurtado@galtecom.com.br', 'financeiro@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br']
   },
   marketing: {
     nome: 'Marketing',
-    emails: ['marketing@galtecom.com.br', 'marketing.nav@galtecom.com.br', 'gfurtado@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br']
   },
   diretoria: {
     nome: 'Diretoria',
-    emails: ['edson@galtecom.com.br', 'financeiro@galtecom.com.br', 'gfurtado@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br']
   },
   engenharia: {
     nome: 'Engenharia/Desenvolvimento',
-    emails: ['engenharia@galtecom.com.br', 'desenvolvimento@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br']
   },
   faturamento: {
     nome: 'Faturamento',
-    emails: ['adm@galtecom.com.br', 'financeiro@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br']
   },
   garantia: {
     nome: 'Garantia',
-    emails: ['garantia@galtecom.com.br', 'garantia1@galtecom.com.br', 'edson@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br']
   }
 };
 
