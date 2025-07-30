@@ -5,9 +5,13 @@ const nodemailer = require('nodemailer');
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
+const axios = require('axios');
 
-/* 1. CONFIGURAÇÕES INICIAIS */
-// Google Sheets Auth
+/* ═══════════════════════════════════════════════════════════
+   1. CONFIGURAÇÕES INICIAIS
+═══════════════════════════════════════════════════════════ */
+
+// Google Sheets
 let auth;
 try {
   if (process.env.GOOGLE_CREDENTIALS) {
@@ -30,7 +34,7 @@ const sheets = google.sheets({ version: 'v4', auth });
 // Telegram Bot
 const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
 
-// SMTP / Nodemailer
+// SMTP
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: Number(process.env.SMTP_PORT),
@@ -41,61 +45,55 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-/* 2. SETORES E CATEGORIAS */
+// Pareto IA Agent
+const PARETO_API_URL = 'https://tess.pareto.io/api';
+const PARETO_TOKEN = process.env.PARETO_API_TOKEN;
+const PARETO_AGENT_ID = process.env.PARETO_AGENT_ID;
+
+/* ═══════════════════════════════════════════════════════════
+   2. CATEGORIAS DOS SETORES
+═══════════════════════════════════════════════════════════ */
+
 const categorias = {
   estoque_logistica: {
     nome: 'Estoque/Logística',
-    emails: ['logistica@galtecom.com.br','estoque@galtecom.com.br','financeiro@galtecom.com.br'],
-    palavrasChave: ['rastreio','rastrear','pedido','entrega','transportadora','prazo','atraso','envio','remessa','comprovante','mercadoria','chegou','não chegou','onde está'],
-    prioridade: 3
+    emails: ['logistica@galtecom.com.br','estoque@galtecom.com.br','financeiro@galtecom.com.br']
   },
   financeiro: {
     nome: 'Financeiro',
-    emails: ['contabil@galtecom.com.br','contabil.nav@galtecom.com.br','financeiro@galtecom.com.br'],
-    palavrasChave: ['segunda via','boleto','prorrogação','pagamento','fatura','cobrança','vencimento','boletos','títulos','prorrogar','dias'],
-    prioridade: 2,
-    isCoringa: true
+    emails: ['contabil@galtecom.com.br','contabil.nav@galtecom.com.br','financeiro@galtecom.com.br']
   },
   comercial: {
     nome: 'Comercial',
-    emails: ['gfurtado@galtecom.com.br','financeiro@galtecom.com.br'],
-    palavrasChave: ['preços','concorrência','acordado','faturou','bonificação','compensar','valor','reclamando','rádios','próximo pedido'],
-    prioridade: 1
+    emails: ['gfurtado@galtecom.com.br','financeiro@galtecom.com.br']
   },
   marketing: {
     nome: 'Marketing',
-    emails: ['marketing@galtecom.com.br','marketing.nav@galtecom.com.br','gfurtado@galtecom.com.br'],
-    palavrasChave: ['fotos','vídeos','produto','flyers','lançamento','fundo branco','diferenciais','câmeras','imagens','material','kc360','krc1610'],
-    prioridade: 3
+    emails: ['marketing@galtecom.com.br','marketing.nav@galtecom.com.br','gfurtado@galtecom.com.br']
   },
   diretoria: {
     nome: 'Diretoria',
-    emails: ['edson@galtecom.com.br','financeiro@galtecom.com.br','gfurtado@galtecom.com.br'],
-    palavrasChave: ['reunião','diretoria','proprietário','insatisfeito','resolver','situação','diretor','dono','gerência'],
-    prioridade: 1
+    emails: ['edson@galtecom.com.br','financeiro@galtecom.com.br','gfurtado@galtecom.com.br']
   },
   engenharia: {
     nome: 'Engenharia/Desenvolvimento',
-    emails: ['engenharia@galtecom.com.br','desenvolvimento@galtecom.com.br'],
-    palavrasChave: ['manual','instalação','dificuldades','sensor','problemas','funcionamento','técnico','especificação','configuração','krc5000','kxs199a','krc4100'],
-    prioridade: 1
+    emails: ['engenharia@galtecom.com.br','desenvolvimento@galtecom.com.br']
   },
   faturamento: {
     nome: 'Faturamento',
-    emails: ['adm@galtecom.com.br','financeiro@galtecom.com.br'],
-    palavrasChave: ['cfop','cst','faturou','correto','questionando','nota fiscal','6202','6308','fiscal','tributário'],
-    prioridade: 1
+    emails: ['adm@galtecom.com.br','financeiro@galtecom.com.br']
   },
   garantia: {
     nome: 'Garantia',
-    emails: ['garantia@galtecom.com.br','garantia1@galtecom.com.br','edson@galtecom.com.br'],
-    palavrasChave: ['garantia','aparelhos','prazo','1 ano','defeito','troca','reparo','fora do prazo','garantir'],
-    prioridade: 1
+    emails: ['garantia@galtecom.com.br','garantia1@galtecom.com.br','edson@galtecom.com.br']
   }
 };
 
-/* 3. HELPERS E ESTADO */
-const chamadosPendentes = new Map();
+/* ═══════════════════════════════════════════════════════════
+   3. ESTADO E HELPERS
+═══════════════════════════════════════════════════════════ */
+
+const conversasEmAndamento = new Map();
 const anexosDoUsuario = new Map();
 
 function gerarProtocolo() {
@@ -108,7 +106,11 @@ function gerarProtocolo() {
 }
 
 function dataHoraBR() {
-  return new Date().toLocaleString('pt-BR',{ timeZone:'America/Sao_Paulo', day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit' });
+  return new Date().toLocaleString('pt-BR',{ 
+    timeZone:'America/Sao_Paulo', 
+    day:'2-digit',month:'2-digit',year:'numeric',
+    hour:'2-digit',minute:'2-digit' 
+  });
 }
 
 function nomeSolicitante(msg) {
@@ -117,23 +119,70 @@ function nomeSolicitante(msg) {
          username ? `@${username}` : `User ${msg.from.id}`;
 }
 
-function classificarMensagem(texto) {
-  const t = texto.toLowerCase();
-  if (t.includes('segunda via') && t.includes('nota fiscal'))
-    return { categoria:'financeiro', score:Infinity, confianca:'alta' };
+/* ═══════════════════════════════════════════════════════════
+   4. COMUNICAÇÃO COM AGENTE IA (PARETO)
+═══════════════════════════════════════════════════════════ */
 
-  const scores = {};
-  for (const [key,cat] of Object.entries(categorias)) {
-    let sc = 0;
-    cat.palavrasChave.forEach(p => t.includes(p.toLowerCase()) && (sc += cat.prioridade));
-    if (sc>0) scores[key] = sc;
+async function consultarAgenteIA(mensagemUsuario, contextoConversa = []) {
+  try {
+    const messages = [
+      ...contextoConversa,
+      { role: 'user', content: mensagemUsuario }
+    ];
+
+    const response = await axios.post(
+      `${PARETO_API_URL}/agents/${PARETO_AGENT_ID}/execute`,
+      {
+        messages: messages,
+        temperature: "0.7",
+        model: "tess-5",
+        tools: "no-tools",
+        wait_execution: true
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${PARETO_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    if (response.data && response.data.responses && response.data.responses[0]) {
+      const output = response.data.responses[0].output;
+      
+      // Tentar parsear como JSON se o agente retornar formato estruturado
+      try {
+        const jsonResponse = JSON.parse(output);
+        return jsonResponse;
+      } catch {
+        // Se não for JSON, retornar como resposta simples
+        return {
+          acao: 'responder',
+          resposta_usuario: output,
+          categoria: null,
+          confianca: 'baixa',
+          proxima_acao: 'continuar_conversa'
+        };
+      }
+    }
+
+    throw new Error('Resposta inválida do agente');
+  } catch (error) {
+    console.error('Erro ao consultar agente IA:', error);
+    return {
+      acao: 'erro',
+      resposta_usuario: 'Desculpe, estou com dificuldades técnicas. Vou processar sua solicitação de forma manual.',
+      categoria: null,
+      confianca: 'baixa',
+      proxima_acao: 'menu_setores'
+    };
   }
-  if (!Object.keys(scores).length) return null;
-  const melhor = Object.keys(scores).reduce((a,b)=> scores[a]>scores[b]?a:b);
-  return { categoria:melhor, score:scores[melhor], confianca: scores[melhor]>=3?'alta':'baixa' };
 }
 
-/* 4. PLANILHA */
+/* ═══════════════════════════════════════════════════════════
+   5. PLANILHA E E-MAIL (MANTÉM FUNCIONALIDADE ATUAL)
+═══════════════════════════════════════════════════════════ */
+
 async function registrarChamado(proto, solicitante, solicitacao, categoria='Aguardando Classificação') {
   try {
     await sheets.spreadsheets.values.append({
@@ -142,39 +191,14 @@ async function registrarChamado(proto, solicitante, solicitacao, categoria='Agua
       valueInputOption:'USER_ENTERED',
       resource:{ values:[[proto,dataHoraBR(),solicitante,categoria,solicitacao,'','Aberto','']] }
     });
+    console.log(`Chamado registrado: ${proto}`);
     return true;
   } catch(err) {
-    console.error('Sheets append error:', err);
+    console.error('Erro ao registrar chamado:', err);
     return false;
   }
 }
 
-async function atualizarCategoria(proto, categoriaNome) {
-  try {
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId: process.env.SHEET_ID,
-      range:`${process.env.SHEET_NAME}!A:H`
-    });
-    const rows = res.data.values||[];
-    for (let i=1;i<rows.length;i++){
-      if (rows[i][0]===proto){
-        await sheets.spreadsheets.values.update({
-          spreadsheetId: process.env.SHEET_ID,
-          range:`${process.env.SHEET_NAME}!D${i+1}`,
-          valueInputOption:'USER_ENTERED',
-          resource:{ values:[[categoriaNome]] }
-        });
-        return true;
-      }
-    }
-    return false;
-  } catch(err){
-    console.error('Sheets update error:', err);
-    return false;
-  }
-}
-
-/* 5. BAIXAR ANEXOS DO TELEGRAM */
 async function baixarArquivoTelegram(fileId, nomeOriginal) {
   return new Promise((resolve, reject) => {
     bot.getFileLink(fileId).then(link=>{
@@ -183,9 +207,7 @@ async function baixarArquivoTelegram(fileId, nomeOriginal) {
       const file = fs.createWriteStream(dest);
       https.get(link, resp=>{
         resp.pipe(file);
-        file.on('finish',()=>{
-          file.close(()=>resolve(dest));
-        });
+        file.on('finish',()=>file.close(()=>resolve(dest)));
       }).on('error',err=>{
         fs.unlinkSync(dest);
         reject(err);
@@ -194,168 +216,242 @@ async function baixarArquivoTelegram(fileId, nomeOriginal) {
   });
 }
 
-/* 6. ENVIAR E-MAIL */
 async function enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacao, anexos=[]) {
   const cat = categorias[categoriaKey];
   if (!cat) return false;
+  
   const mail = {
     from: `"CAR KX3" <${process.env.SMTP_USER}>`,
     to: cat.emails.join(', '),
     subject: `Novo chamado – Protocolo ${proto} – ${cat.nome}`,
-    text: `Olá equipe ${cat.nome},\n\nChamado: ${proto}\nSolicitante: ${solicitante}\nCategoria: ${cat.nome}\nSolicitação: ${solicitacao}\n\nAtenciosamente, CAR KX3`,
+    text: `Olá equipe ${cat.nome},
+
+Um novo chamado foi aberto na Central de Atendimento ao Representante.
+
+Protocolo: ${proto}
+Solicitante: ${solicitante}
+Categoria: ${cat.nome}
+Solicitação: ${solicitacao}
+
+Por favor, verifiquem e deem seguimento ao chamado.
+
+Atenciosamente,
+CAR – Central de Atendimento ao Representante
+KX3 Galtecom`,
     attachments: anexos.map(c=>({ filename:path.basename(c), path:c }))
   };
+  
   try {
     await transporter.sendMail(mail);
     anexos.forEach(c=> fs.unlink(c, ()=>{}));
+    console.log(`E-mail enviado ao setor: ${cat.nome}`);
     return true;
   } catch(err){
-    console.error('Erro envio email:', err);
+    console.error('Erro ao enviar e-mail:', err);
     return false;
   }
 }
 
-/* 7. HANDLERS TELEGRAM */
-// Texto
-bot.on('text', async msg=>{
+/* ═══════════════════════════════════════════════════════════
+   6. PROCESSAMENTO PRINCIPAL COM IA
+═══════════════════════════════════════════════════════════ */
+
+async function processarMensagem(chatId, texto, solicitante) {
+  const conversa = conversasEmAndamento.get(chatId) || [];
+  const anexos = anexosDoUsuario.get(chatId) || [];
+
+  // Consultar agente IA
+  const respostaIA = await consultarAgenteIA(texto, conversa);
+  
+  // Atualizar contexto da conversa
+  conversa.push({ role: 'user', content: texto });
+  conversa.push({ role: 'assistant', content: respostaIA.resposta_usuario });
+  conversasEmAndamento.set(chatId, conversa);
+
+  // Enviar resposta do agente para o usuário
+  await bot.sendMessage(chatId, respostaIA.resposta_usuario, { parse_mode: 'Markdown' });
+
+  // Processar ação recomendada pelo agente
+  if (respostaIA.proxima_acao === 'gerar_protocolo' && respostaIA.categoria) {
+    const proto = gerarProtocolo();
+    const cat = categorias[respostaIA.categoria];
+    
+    if (cat) {
+      // Registrar chamado
+      const solicitacaoCompleta = conversa
+        .filter(msg => msg.role === 'user')
+        .map(msg => msg.content)
+        .join(' | ');
+      
+      await registrarChamado(proto, solicitante, solicitacaoCompleta, cat.nome);
+      await enviarEmailAbertura(proto, solicitante, respostaIA.categoria, solicitacaoCompleta, anexos);
+      
+      await bot.sendMessage(chatId, 
+        `✅ *Chamado criado com sucesso!*\n\n📋 Protocolo: *${proto}*\n🏢 Setor: *${cat.nome}*\n📧 E-mail enviado à equipe responsável.`,
+        { parse_mode: 'Markdown' }
+      );
+      
+      // Limpar estado
+      conversasEmAndamento.delete(chatId);
+      anexosDoUsuario.delete(chatId);
+    }
+  } else if (respostaIA.proxima_acao === 'menu_setores') {
+    // Fallback para menu manual se IA não conseguir classificar
+    mostrarMenuCategorias(chatId);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   7. HANDLERS TELEGRAM
+═══════════════════════════════════════════════════════════ */
+
+// Mensagens de texto
+bot.on('text', async msg => {
   const chatId = msg.chat.id;
   const txt = msg.text;
   const solicitante = nomeSolicitante(msg);
-  if (chamadosPendentes.has(chatId)) return;
 
-  const proto = gerarProtocolo();
-  await bot.sendMessage(chatId, `🎫 Protocolo: ${proto}\n\nRecebi: "${txt}"\nAnalisando...`);
-
-  const cls = classificarMensagem(txt);
-  const anexos = anexosDoUsuario.get(chatId)||[];
-
-  if (cls && cls.confianca==='alta') {
-    const cat = categorias[cls.categoria];
-    await registrarChamado(proto, solicitante, txt, cat.nome);
-    await enviarEmailAbertura(proto, solicitante, cls.categoria, txt, anexos);
-    anexosDoUsuario.delete(chatId);
-    await bot.sendMessage(chatId, `✅ Chamado ${proto} enviado para ${cat.nome}`);
-  }
-  else if (cls) {
-    await registrarChamado(proto, solicitante, txt);
-    chamadosPendentes.set(chatId,{ protocolo:proto, categoriaSugerida:cls.categoria, anexos });
-    const cat = categorias[cls.categoria];
-    await bot.sendMessage(chatId, `🤖 Pode ser *${cat.nome}*?`, {
-      parse_mode:'Markdown',
-      reply_markup:{
-        inline_keyboard:[
-          [{text:'✅ Sim',callback_data:`confirm_${proto}`}],
-          [{text:'❌ Não',callback_data:`reject_${proto}`}]
-        ]
-      }
-    });
-  }
-  else {
-    await registrarChamado(proto, solicitante, txt);
-    chamadosPendentes.set(chatId,{ protocolo:proto, anexos });
-    mostrarMenuCategorias(chatId,proto);
+  try {
+    await processarMensagem(chatId, txt, solicitante);
+  } catch (error) {
+    console.error('Erro ao processar mensagem:', error);
+    await bot.sendMessage(chatId, '❌ Ops! Ocorreu um erro. Tente novamente em alguns minutos.');
   }
 });
 
-// Foto
-bot.on('photo', async msg=>{
+// Anexos - Fotos
+bot.on('photo', async msg => {
   const chatId = msg.chat.id;
   const sizes = msg.photo;
   const arq = sizes[sizes.length-1];
   const nome = `foto_${arq.file_unique_id}.jpg`;
+  
   try {
-    const caminho = await baixarArquivoTelegram(arq.file_id,nome);
-    if (!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId,[]);
+    const caminho = await baixarArquivoTelegram(arq.file_id, nome);
+    if (!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId, []);
     anexosDoUsuario.get(chatId).push(caminho);
-    await bot.sendMessage(chatId, `📸 Foto salva. Agora envie sua mensagem.`);
+    await bot.sendMessage(chatId, `📸 Foto recebida! Agora me conte sobre sua solicitação.`);
   } catch {
-    await bot.sendMessage(chatId,'❌ Falha ao baixar foto.');
+    await bot.sendMessage(chatId, '❌ Não consegui processar sua foto. Tente novamente.');
   }
 });
 
-// Documento
-bot.on('document',async msg=>{
-  const chatId=msg.chat.id, doc=msg.document;
-  const nome=doc.file_name||`doc_${doc.file_unique_id}`;
+// Anexos - Documentos
+bot.on('document', async msg => {
+  const chatId = msg.chat.id;
+  const doc = msg.document;
+  const nome = doc.file_name || `doc_${doc.file_unique_id}`;
+  
   try {
-    const caminho=await baixarArquivoTelegram(doc.file_id,nome);
-    if(!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId,[]);
+    const caminho = await baixarArquivoTelegram(doc.file_id, nome);
+    if (!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId, []);
     anexosDoUsuario.get(chatId).push(caminho);
-    await bot.sendMessage(chatId,`📎 Documento salvo. Agora envie sua mensagem.`);
-  }catch{
-    await bot.sendMessage(chatId,'❌ Falha ao baixar documento.');
+    await bot.sendMessage(chatId, `📎 Documento recebido! Agora me conte sobre sua solicitação.`);
+  } catch {
+    await bot.sendMessage(chatId, '❌ Não consegui processar seu documento. Tente novamente.');
   }
 });
 
-// Áudio
-bot.on('audio',async msg=>{
-  const chatId=msg.chat.id,aud=msg.audio;
-  const nome=aud.file_name||`audio_${aud.file_unique_id}.mp3`;
+// Anexos - Áudios
+bot.on('audio', async msg => {
+  const chatId = msg.chat.id;
+  const aud = msg.audio;
+  const nome = aud.file_name || `audio_${aud.file_unique_id}.mp3`;
+  
   try {
-    const caminho=await baixarArquivoTelegram(aud.file_id,nome);
-    if(!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId,[]);
+    const caminho = await baixarArquivoTelegram(aud.file_id, nome);
+    if (!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId, []);
     anexosDoUsuario.get(chatId).push(caminho);
-    await bot.sendMessage(chatId,`🎵 Áudio salvo. Agora envie sua mensagem.`);
-  }catch{
-    await bot.sendMessage(chatId,'❌ Falha ao baixar áudio.');
+    await bot.sendMessage(chatId, `🎵 Áudio recebido! Agora me conte sobre sua solicitação.`);
+  } catch {
+    await bot.sendMessage(chatId, '❌ Não consegui processar seu áudio. Tente novamente.');
   }
 });
 
-// Vídeo
-bot.on('video',async msg=>{
-  const chatId=msg.chat.id, vid=msg.video;
-  const nome=vid.file_name||`video_${vid.file_unique_id}.mp4`;
+// Anexos - Vídeos
+bot.on('video', async msg => {
+  const chatId = msg.chat.id;
+  const vid = msg.video;
+  const nome = vid.file_name || `video_${vid.file_unique_id}.mp4`;
+  
   try {
-    const caminho=await baixarArquivoTelegram(vid.file_id,nome);
-    if(!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId,[]);
+    const caminho = await baixarArquivoTelegram(vid.file_id, nome);
+    if (!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId, []);
     anexosDoUsuario.get(chatId).push(caminho);
-    await bot.sendMessage(chatId,`🎬 Vídeo salvo. Agora envie sua mensagem.`);
-  }catch{
-    await bot.sendMessage(chatId,'❌ Falha ao baixar vídeo.');
+    await bot.sendMessage(chatId, `🎬 Vídeo recebido! Agora me conte sobre sua solicitação.`);
+  } catch {
+    await bot.sendMessage(chatId, '❌ Não consegui processar seu vídeo. Tente novamente.');
   }
 });
 
-// Callbacks
-bot.on('callback_query',async q=>{
-  const chatId=q.message.chat.id, data=q.data, pend=chamadosPendentes.get(chatId);
-  if(data.startsWith('confirm_')){
-    const proto=data.replace('confirm_','');
-    if(pend?.categoriaSugerida){
-      const ck=pend.categoriaSugerida, cat=categorias[ck];
-      await atualizarCategoria(proto,cat.nome);
-      await enviarEmailAbertura(proto,nomeSolicitante(q.message),ck,'Confirmado',pend.anexos||[]);
-      await bot.editMessageText(`✅ Chamado ${proto} confirmado p/ ${cat.nome}`,{chat_id:chatId,message_id:q.message.message_id});
-      chamadosPendentes.delete(chatId); anexosDoUsuario.delete(chatId);
-    }
-  } else if(data.startsWith('reject_')){
-    const proto=data.replace('reject_','');
-    await bot.editMessageText('Escolha o setor:',{chat_id:chatId,message_id:q.message.message_id});
-    mostrarMenuCategorias(chatId,proto);
-  } else if(data.startsWith('cat_')){
-    const parts=data.split('_'), proto=parts.pop(), ck=parts.slice(1).join('_'), cat=categorias[ck];
-    await atualizarCategoria(proto,cat.nome);
-    await enviarEmailAbertura(proto,nomeSolicitante(q.message),ck,'Selecionado',pend?.anexos||[]);
-    await bot.editMessageText(`✅ Chamado ${proto} p/ ${cat.nome}`,{chat_id:chatId,message_id:q.message.message_id});
-    chamadosPendentes.delete(chatId); anexosDoUsuario.delete(chatId);
-  }
-  bot.answerCallbackQuery(q.id);
-});
+/* ═══════════════════════════════════════════════════════════
+   8. MENU MANUAL (FALLBACK)
+═══════════════════════════════════════════════════════════ */
 
-function mostrarMenuCategorias(chatId,proto){
-  bot.sendMessage(chatId,'Selecione o setor:',{
-    reply_markup:{
-      inline_keyboard:[
-        [{text:'📦 Estoque/Logística',callback_data:`cat_estoque_logistica_${proto}`}],
-        [{text:'💰 Financeiro',callback_data:`cat_financeiro_${proto}`}],
-        [{text:'🤝 Comercial',callback_data:`cat_comercial_${proto}`}],
-        [{text:'📢 Marketing',callback_data:`cat_marketing_${proto}`}],
-        [{text:'👔 Diretoria',callback_data:`cat_diretoria_${proto}`}],
-        [{text:'🔧 Engenharia',callback_data:`cat_engenharia_${proto}`}],
-        [{text:'📊 Faturamento',callback_data:`cat_faturamento_${proto}`}],
-        [{text:'🛡️ Garantia',callback_data:`cat_garantia_${proto}`}]
+function mostrarMenuCategorias(chatId) {
+  bot.sendMessage(chatId, '🤖 Selecione o setor para sua solicitação:', {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '📦 Estoque/Logística', callback_data: `manual_estoque_logistica` }],
+        [{ text: '💰 Financeiro', callback_data: `manual_financeiro` }],
+        [{ text: '🤝 Comercial', callback_data: `manual_comercial` }],
+        [{ text: '📢 Marketing', callback_data: `manual_marketing` }],
+        [{ text: '👔 Diretoria', callback_data: `manual_diretoria` }],
+        [{ text: '🔧 Engenharia', callback_data: `manual_engenharia` }],
+        [{ text: '📊 Faturamento', callback_data: `manual_faturamento` }],
+        [{ text: '🛡️ Garantia', callback_data: `manual_garantia` }]
       ]
     }
   });
 }
 
-console.log('🤖 Bot CAR KX3 rodando com anexos e e-mails!');
+// Callback para seleção manual
+bot.on('callback_query', async q => {
+  const chatId = q.message.chat.id;
+  const data = q.data;
+  
+  if (data.startsWith('manual_')) {
+    const categoriaKey = data.replace('manual_', '');
+    const cat = categorias[categoriaKey];
+    const solicitante = nomeSolicitante(q.message);
+    const conversa = conversasEmAndamento.get(chatId) || [];
+    const anexos = anexosDoUsuario.get(chatId) || [];
+    
+    if (cat) {
+      const proto = gerarProtocolo();
+      const solicitacaoCompleta = conversa
+        .filter(msg => msg.role === 'user')
+        .map(msg => msg.content)
+        .join(' | ') || 'Seleção manual de categoria';
+      
+      await registrarChamado(proto, solicitante, solicitacaoCompleta, cat.nome);
+      await enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacaoCompleta, anexos);
+      
+      await bot.editMessageText(
+        `✅ *Chamado criado!*\n\n📋 Protocolo: *${proto}*\n🏢 Setor: *${cat.nome}*\n📧 E-mail enviado à equipe responsável.`,
+        { chat_id: chatId, message_id: q.message.message_id, parse_mode: 'Markdown' }
+      );
+      
+      // Limpar estado
+      conversasEmAndamento.delete(chatId);
+      anexosDoUsuario.delete(chatId);
+    }
+  }
+  
+  await bot.answerCallbackQuery(q.id);
+});
+
+/* ═══════════════════════════════════════════════════════════
+   9. INICIALIZAÇÃO
+═══════════════════════════════════════════════════════════ */
+
+console.log('🤖 Bot CAR KX3 com IA iniciado!');
+console.log('🧠 Agente IA integrado com sucesso');
+console.log('✅ Funcionalidades ativas:');
+console.log('   • Conversação inteligente com IA');
+console.log('   • Classificação automática avançada');
+console.log('   • Geração de protocolos únicos');
+console.log('   • Registro na planilha Google Sheets');
+console.log('   • Envio de e-mails com anexos');
+console.log('   • Suporte a fotos, documentos, áudios e vídeos');
+console.log('📞 Aguardando mensagens...');
