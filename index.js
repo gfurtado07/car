@@ -57,45 +57,45 @@ const PARETO_AGENT_ID = process.env.PARETO_AGENT_ID;
 const categorias = {
   estoque_logistica: {
     nome: 'Estoque/Logística',
-    emails: ['logistica@galtecom.com.br','estoque@galtecom.com.br','financeiro@galtecom.com.br']
+    emails: ['logistica@galtecom.com.br', 'estoque@galtecom.com.br', 'financeiro@galtecom.com.br']
   },
   financeiro: {
     nome: 'Financeiro',
-    emails: ['contabil@galtecom.com.br','contabil.nav@galtecom.com.br','financeiro@galtecom.com.br']
+    emails: ['contabil@galtecom.com.br', 'contabil.nav@galtecom.com.br', 'financeiro@galtecom.com.br']
   },
   comercial: {
     nome: 'Comercial',
-    emails: ['gfurtado@galtecom.com.br','financeiro@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br', 'financeiro@galtecom.com.br']
   },
   marketing: {
     nome: 'Marketing',
-    emails: ['marketing@galtecom.com.br','marketing.nav@galtecom.com.br','gfurtado@galtecom.com.br']
+    emails: ['marketing@galtecom.com.br', 'marketing.nav@galtecom.com.br', 'gfurtado@galtecom.com.br']
   },
   diretoria: {
     nome: 'Diretoria',
-    emails: ['edson@galtecom.com.br','financeiro@galtecom.com.br','gfurtado@galtecom.com.br']
+    emails: ['edson@galtecom.com.br', 'financeiro@galtecom.com.br', 'gfurtado@galtecom.com.br']
   },
   engenharia: {
     nome: 'Engenharia/Desenvolvimento',
-    emails: ['engenharia@galtecom.com.br','desenvolvimento@galtecom.com.br']
+    emails: ['engenharia@galtecom.com.br', 'desenvolvimento@galtecom.com.br']
   },
   faturamento: {
     nome: 'Faturamento',
-    emails: ['adm@galtecom.com.br','financeiro@galtecom.com.br']
+    emails: ['adm@galtecom.com.br', 'financeiro@galtecom.com.br']
   },
   garantia: {
     nome: 'Garantia',
-    emails: ['garantia@galtecom.com.br','garantia1@galtecom.com.br','edson@galtecom.com.br']
+    emails: ['garantia@galtecom.com.br', 'garantia1@galtecom.com.br', 'edson@galtecom.com.br']
   }
 };
 
 /* ═══════════════════════════════════════════════════════════
-   3. ESTADO, HELPERS E TRANSCODIFICAÇÃO DE ÁUDIO
+   3. ESTADO, HELPERS E TRANSCRIÇÃO DE ÁUDIO
 ═══════════════════════════════════════════════════════════ */
 
 const conversasEmAndamento = new Map();
 const anexosDoUsuario = new Map();
-const protocolosRegistrados = new Map();  // Armazena os protocolos gerados por chat
+const protocolosRegistrados = new Map(); // Armazena protocolos gerados por chat
 
 function gerarProtocolo() {
   const d = new Date();
@@ -316,7 +316,7 @@ KX3 Galtecom`,
 ═══════════════════════════════════════════════════════════ */
 
 async function processarMensagem(chatId, texto, solicitante) {
-  // Verifica se o usuário está perguntando pelo número do protocolo
+  // Se o usuário pergunta pelo protocolo
   if (/qual\s+n(ú|u)mero do protocolo/i.test(texto)) {
     if (protocolosRegistrados.has(chatId)) {
       const proto = protocolosRegistrados.get(chatId);
@@ -328,13 +328,13 @@ async function processarMensagem(chatId, texto, solicitante) {
     }
   }
   
-  // Se o usuário solicita explicitamente a abertura de um CAR/chamado
+  // Se o usuário solicita explicitamente abrir um CAR/chamado
   if (/abrir\s+(um\s+)?(car|chamado)/i.test(texto)) {
     const proto = gerarProtocolo();
     protocolosRegistrados.set(chatId, proto);
     const conversa = conversasEmAndamento.get(chatId) || [];
     const solicitacaoCompleta = conversa.length > 0 ? conversa.map(m => m.content).join(' | ') : texto;
-    // Aqui, definimos a categoria manual; no exemplo, para instalação de sensor, escolhemos engenharia.
+    // Define a categoria manual; neste exemplo usamos "engenharia"
     const categoryKey = "engenharia";
     
     await registrarChamado(proto, solicitante, solicitacaoCompleta, categorias[categoryKey].nome);
@@ -350,7 +350,7 @@ async function processarMensagem(chatId, texto, solicitante) {
     return;
   }
   
-  // Caso contrário, continua com a integração via IA.
+  // Continua a integração via IA
   const conversa = conversasEmAndamento.get(chatId) || [];
   const anexos = anexosDoUsuario.get(chatId) || [];
   
@@ -372,13 +372,30 @@ async function processarMensagem(chatId, texto, solicitante) {
           .map(msg => msg.content)
           .join(' | ');
       
-      await registrarChamado(proto, solicitante, solicitacaoCompleta, categorias[respostaIA.categoria].nome);
-      await enviarEmailAbertura(proto, solicitante, respostaIA.categoria, solicitacaoCompleta, anexos, respostaIA.informacoes_coletadas);
+      // Mapeia a categoria retornada pelo agente para a chave correta em categorias
+      let categoryKey = respostaIA.categoria;
+      const categoryMapping = {
+        "engenharia_desenvolvimento": "engenharia"
+        // Adicione outros mapeamentos se necessário
+      };
+      if (categoryMapping[categoryKey]) {
+        categoryKey = categoryMapping[categoryKey];
+      }
       
-      await bot.sendMessage(chatId, 
-          `✅ *Chamado criado com sucesso!*\n\n📋 Protocolo: *${proto}*\n🏢 Setor: *${categorias[respostaIA.categoria].nome}*\n📧 E-mail enviado à equipe responsável.\n\n📱 Guarde este número de protocolo para acompanhar seu chamado.`,
-          { parse_mode: 'Markdown' }
-      );
+      const cat = categorias[categoryKey];
+      
+      if (cat) {
+        await registrarChamado(proto, solicitante, solicitacaoCompleta, cat.nome);
+        await enviarEmailAbertura(proto, solicitante, categoryKey, solicitacaoCompleta, anexos, respostaIA.informacoes_coletadas);
+        
+        await bot.sendMessage(chatId, 
+            `✅ *Chamado criado com sucesso!*\n\n📋 Protocolo: *${proto}*\n🏢 Setor: *${cat.nome}*\n📧 E-mail enviado à equipe responsável.\n\n📱 Guarde este número de protocolo para acompanhar seu chamado.`,
+            { parse_mode: 'Markdown' }
+        );
+      } else {
+        console.warn(`Setor inválido retornado pelo agente: ${respostaIA.categoria}`);
+        await bot.sendMessage(chatId, '❌ Desculpe, não foi possível abrir o chamado no momento. Por favor, tente novamente mais tarde ou selecione manualmente a categoria.');
+      }
       
       conversasEmAndamento.delete(chatId);
       anexosDoUsuario.delete(chatId);
