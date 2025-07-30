@@ -37,7 +37,7 @@ const sheets = google.sheets({ version: 'v4', auth });
 const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
 
 // SMTP
-const transporter = nodemailer.createTransport({
+const transporter = nodemailer.createTransporter({
   host: process.env.SMTP_HOST,
   port: Number(process.env.SMTP_PORT),
   secure: Number(process.env.SMTP_PORT) === 465,
@@ -59,35 +59,35 @@ const PARETO_AGENT_ID = process.env.PARETO_AGENT_ID;
 const categorias = {
   estoque_logistica: {
     nome: 'Estoque/Logística',
-    emails: ['gfurtado@galtecom.com.br']
+    emails: ['logistica@galtecom.com.br', 'estoque@galtecom.com.br', 'financeiro@galtecom.com.br']
   },
   financeiro: {
     nome: 'Financeiro',
-    emails: ['gfurtado@galtecom.com.br']
+    emails: ['contabil@galtecom.com.br', 'contabil.nav@galtecom.com.br', 'financeiro@galtecom.com.br']
   },
   comercial: {
     nome: 'Comercial',
-    emails: ['gfurtado@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br', 'financeiro@galtecom.com.br']
   },
   marketing: {
     nome: 'Marketing',
-    emails: ['gfurtado@galtecom.com.br']
+    emails: ['marketing@galtecom.com.br', 'marketing.nav@galtecom.com.br', 'gfurtado@galtecom.com.br']
   },
   diretoria: {
     nome: 'Diretoria',
-    emails: ['gfurtado@galtecom.com.br']
+    emails: ['edson@galtecom.com.br', 'financeiro@galtecom.com.br', 'gfurtado@galtecom.com.br']
   },
   engenharia: {
     nome: 'Engenharia/Desenvolvimento',
-    emails: ['gfurtado@galtecom.com.br']
+    emails: ['engenharia@galtecom.com.br', 'desenvolvimento@galtecom.com.br']
   },
   faturamento: {
     nome: 'Faturamento',
-    emails: ['gfurtado@galtecom.com.br']
+    emails: ['adm@galtecom.com.br', 'financeiro@galtecom.com.br']
   },
   garantia: {
     nome: 'Garantia',
-    emails: ['gfurtado@galtecom.com.br']
+    emails: ['garantia@galtecom.com.br', 'garantia1@galtecom.com.br', 'edson@galtecom.com.br']
   }
 };
 
@@ -514,6 +514,24 @@ bot.on('voice', async msg => {
   }
 });
 
+// Menu manual (fallback)
+function mostrarMenuCategorias(chatId) {
+  bot.sendMessage(chatId, '🤖 Para prosseguir, selecione o setor mais adequado para sua solicitação:', {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: '📦 Estoque/Logística', callback_data: `manual_estoque_logistica` }],
+        [{ text: '💰 Financeiro', callback_data: `manual_financeiro` }],
+        [{ text: '🤝 Comercial', callback_data: `manual_comercial` }],
+        [{ text: '📢 Marketing', callback_data: `manual_marketing` }],
+        [{ text: '👔 Diretoria', callback_data: `manual_diretoria` }],
+        [{ text: '🔧 Engenharia', callback_data: `manual_engenharia` }],
+        [{ text: '📊 Faturamento', callback_data: `manual_faturamento` }],
+        [{ text: '🛡️ Garantia', callback_data: `manual_garantia` }]
+      ]
+    }
+  });
+}
+
 // Callback para interações via inline keyboard
 bot.on('callback_query', async q => {
   const chatId = q.message.chat.id;
@@ -560,7 +578,7 @@ bot.on('callback_query', async q => {
 });
 
 /* ═══════════════════════════════════════════════════════════
-   8. MONITOR DE EMAILS (ATUALIZAÇÕES DE CHAMADOS)
+   8. MONITOR DE EMAILS (ATUALIZAÇÕES DE CHAMADOS) - CORRIGIDO
 ═══════════════════════════════════════════════════════════ */
 
 function startEmailMonitor() {
@@ -580,6 +598,8 @@ function startEmailMonitor() {
         console.error('Erro ao abrir a caixa de entrada:', err);
         return;
       }
+
+      console.log('📧 Monitor de e-mails iniciado com sucesso!');
 
       // Escuta por novas mensagens
       imap.on('mail', () => {
@@ -601,10 +621,29 @@ function startEmailMonitor() {
                 try {
                   const mail = await simpleParser(emailBuffer);
                   const subject = mail.subject || '';
-                  // Supõe que o assunto contenha "Protocolo: 20250730-1545" ou similar
-                  const match = subject.match(/Protocolo\s*[:\-]\s*(\d{8}-\d{4})/i);
+                  const body = mail.text || '';
+                  
+                  console.log('📨 Novo email recebido!');
+                  console.log('Assunto:', subject);
+                  console.log('Início do corpo:', body.substring(0, 200));
+                  
+                  // Busca protocolo no assunto com regex mais flexível
+                  let match = subject.match(/protocolo\s*[:\-–—]?\s*(\d{8}-\d{4})/i);
+                  let proto = null;
+                  
                   if (match) {
-                    const proto = match[1];
+                    proto = match[1];
+                    console.log('✅ Protocolo encontrado no assunto:', proto);
+                  } else {
+                    // Tenta buscar no corpo do email
+                    const matchBody = body.match(/protocolo\s*[:\-–—]?\s*(\d{8}-\d{4})/i);
+                    if (matchBody) {
+                      proto = matchBody[1];
+                      console.log('✅ Protocolo encontrado no corpo:', proto);
+                    }
+                  }
+                  
+                  if (proto) {
                     let targetChat = null;
                     // Procura pelo chat que possui esse protocolo
                     for (const [chatId, protocol] of protocolosRegistrados.entries()) {
@@ -613,23 +652,26 @@ function startEmailMonitor() {
                         break;
                       }
                     }
+                    
                     if (targetChat) {
-                      await bot.sendMessage(targetChat, `📧 Atualização no chamado de protocolo ${proto}:\n\n${mail.text.trim()}\n\nDeseja finalizar o CAR ou fazer mais alguma solicitação?`, {
+                      console.log('📤 Enviando atualização para chat:', targetChat);
+                      await bot.sendMessage(targetChat, `📧 *Atualização no chamado ${proto}:*\n\n${body.trim()}\n\nDeseja finalizar o CAR ou fazer mais alguma solicitação?`, {
+                        parse_mode: 'Markdown',
                         reply_markup: {
                           inline_keyboard: [
-                            [{ text: 'Finalizar CAR', callback_data: `finalizar_${proto}` }],
-                            [{ text: 'Mais Solicitação', callback_data: `mais_${proto}` }]
+                            [{ text: '✅ Finalizar CAR', callback_data: `finalizar_${proto}` }],
+                            [{ text: '🔄 Mais Solicitação', callback_data: `mais_${proto}` }]
                           ]
                         }
                       });
                     } else {
-                      console.log(`Protocolo ${proto} não associado a nenhum chat.`);
+                      console.log(`⚠️ Protocolo ${proto} não associado a nenhum chat ativo.`);
                     }
                   } else {
-                    console.log("Email não contém protocolo na linha de assunto.");
+                    console.log('❌ Email não contém protocolo no assunto ou corpo.');
                   }
                 } catch (e) {
-                  console.error("Erro ao processar email:", e);
+                  console.error('Erro ao processar email:', e);
                 }
               });
             });
@@ -674,4 +716,3 @@ console.log('   • Transcrição de mensagens de voz');
 console.log('   • Fallback manual para abertura de chamados e consulta de protocolo');
 console.log('   • Monitoramento de respostas de e-mail com atualização de chamados');
 console.log('📞 Aguardando mensagens...');
-
