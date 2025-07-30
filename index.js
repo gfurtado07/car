@@ -153,6 +153,56 @@ async function transcreverAudio(filePath) {
   return transcription;
 }
 
+/* ───────────────────────────────────────────────────────────
+   3.2 PROCESSAMENTO DE ANEXOS DE E-MAIL
+──────────────────────────────────────────────────────────── */
+
+async function processarAnexosEmail(attachments, chatId) {
+  const anexosProcessados = [];
+  
+  if (!attachments || attachments.length === 0) {
+    return anexosProcessados;
+  }
+  
+  for (const attachment of attachments) {
+    try {
+      const filename = attachment.filename || `anexo_${Date.now()}`;
+      const filepath = `/tmp/${filename}`;
+      
+      // Salva o anexo temporariamente
+      fs.writeFileSync(filepath, attachment.content);
+      
+      // Detecta o tipo do arquivo e envia apropriadamente
+      const mimeType = attachment.contentType || '';
+      const isImage = mimeType.startsWith('image/');
+      const isDocument = !isImage;
+      
+      if (isImage) {
+        // Envia como foto
+        await bot.sendPhoto(chatId, filepath, {
+          caption: `📎 Anexo: ${filename}`
+        });
+      } else {
+        // Envia como documento
+        await bot.sendDocument(chatId, filepath, {
+          caption: `📎 Anexo: ${filename}`
+        });
+      }
+      
+      console.log(`📎 Anexo enviado para o usuário: ${filename}`);
+      anexosProcessados.push(filename);
+      
+      // Remove o arquivo temporário
+      fs.unlinkSync(filepath);
+      
+    } catch (error) {
+      console.error('Erro ao processar anexo:', error);
+    }
+  }
+  
+  return anexosProcessados;
+}
+
 /* ═══════════════════════════════════════════════════════════
    4. COMUNICAÇÃO COM AGENTE IA (PARETO) – CORRIGIDA
 ═══════════════════════════════════════════════════════════ */
@@ -365,6 +415,11 @@ async function enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacao
     if (informacoesColetadas.detalhes_extras) infoExtra += `- Detalhes: ${informacoesColetadas.detalhes_extras}\n`;
   }
   
+  let anexoInfo = '';
+  if (anexos.length > 0) {
+    anexoInfo = `\n\nAnexos enviados: ${anexos.length} arquivo(s)`;
+  }
+  
   const mail = {
     from: `"CAR KX3" <${process.env.SMTP_USER}>`,
     to: cat.emails.join(', '),
@@ -376,7 +431,7 @@ Um novo chamado foi aberto na Central de Atendimento ao Representante.
 Protocolo: ${proto}
 Solicitante: ${solicitante}
 Categoria: ${cat.nome}
-Solicitação: ${solicitacao}${infoExtra}
+Solicitação: ${solicitacao}${infoExtra}${anexoInfo}
 
 Por favor, verifiquem e deem seguimento ao chamado.
 
@@ -711,10 +766,12 @@ function startEmailMonitor() {
                   const mail = await simpleParser(emailBuffer);
                   const subject = mail.subject || '';
                   const body = mail.text || '';
+                  const attachments = mail.attachments || [];
                   
                   console.log('📨 Novo email recebido!');
                   console.log('Assunto:', subject);
                   console.log('Início do corpo:', body.substring(0, 200));
+                  console.log('Anexos:', attachments.length);
                   
                   // Busca protocolo no assunto com regex mais flexível
                   let match = subject.match(/protocolo\s*[:\-–—]?\s*(\d{8}-\d{4})/i);
@@ -747,8 +804,23 @@ function startEmailMonitor() {
                     
                     if (targetChat) {
                       console.log('📤 Enviando atualização para chat:', targetChat);
-                      await bot.sendMessage(targetChat, `📧 *Atualização no chamado ${proto}:*\n\n${body.trim()}\n\nDeseja finalizar o CAR ou fazer mais alguma solicitação?`, {
-                        parse_mode: 'Markdown',
+                      
+                      // Envia a mensagem de resposta
+                      await bot.sendMessage(targetChat, `📧 *Atualização no chamado ${proto}:*\n\n${body.trim()}`, {
+                        parse_mode: 'Markdown'
+                      });
+                      
+                      // Processa e envia anexos se existirem
+                      if (attachments.length > 0) {
+                        console.log(`📎 Processando ${attachments.length} anexo(s)...`);
+                        const anexosEnviados = await processarAnexosEmail(attachments, targetChat);
+                        if (anexosEnviados.length > 0) {
+                          await bot.sendMessage(targetChat, `📎 ${anexosEnviados.length} anexo(s) enviado(s) junto com a resposta.`);
+                        }
+                      }
+                      
+                      // Envia os botões de ação
+                      await bot.sendMessage(targetChat, `Deseja finalizar o CAR ou fazer mais alguma solicitação?`, {
                         reply_markup: {
                           inline_keyboard: [
                             [{ text: '✅ Finalizar CAR', callback_data: `finalizar_${proto}` }],
@@ -756,6 +828,7 @@ function startEmailMonitor() {
                           ]
                         }
                       });
+                      
                     } else {
                       console.log(`⚠️ Protocolo ${proto} não associado a nenhum chat ativo.`);
                     }
@@ -802,12 +875,13 @@ console.log('   • Conversação inteligente com IA');
 console.log('   • Classificação automática avançada');
 console.log('   • Geração de protocolos únicos');
 console.log('   • Registro na planilha Google Sheets');
-console.log('   • Envio de e-mails com anexos');
+console.log('   • Envio de e-mails com anexos do usuário');
 console.log('   • Suporte a fotos, documentos, áudios e vídeos');
 console.log('   • Transcrição de mensagens de voz');
 console.log('   • Fallback manual para abertura de chamados e consulta de protocolo');
 console.log('   • Monitoramento de respostas de e-mail com atualização de chamados');
 console.log('   • Atualização de status para Finalizado no Google Sheets');
 console.log('   • Registro automático de respostas na planilha');
+console.log('   • Encaminhamento de anexos de e-mail para o usuário no Telegram');
 console.log('📞 Aguardando mensagens...');
 
