@@ -57,44 +57,45 @@ const PARETO_AGENT_ID = process.env.PARETO_AGENT_ID;
 const categorias = {
   estoque_logistica: {
     nome: 'Estoque/Logística',
-    emails: ['logistica@galtecom.com.br', 'estoque@galtecom.com.br', 'financeiro@galtecom.com.br']
+    emails: ['logistica@galtecom.com.br','estoque@galtecom.com.br','financeiro@galtecom.com.br']
   },
   financeiro: {
     nome: 'Financeiro',
-    emails: ['contabil@galtecom.com.br', 'contabil.nav@galtecom.com.br', 'financeiro@galtecom.com.br']
+    emails: ['contabil@galtecom.com.br','contabil.nav@galtecom.com.br','financeiro@galtecom.com.br']
   },
   comercial: {
     nome: 'Comercial',
-    emails: ['gfurtado@galtecom.com.br', 'financeiro@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br','financeiro@galtecom.com.br']
   },
   marketing: {
     nome: 'Marketing',
-    emails: ['marketing@galtecom.com.br', 'marketing.nav@galtecom.com.br', 'gfurtado@galtecom.com.br']
+    emails: ['marketing@galtecom.com.br','marketing.nav@galtecom.com.br','gfurtado@galtecom.com.br']
   },
   diretoria: {
     nome: 'Diretoria',
-    emails: ['edson@galtecom.com.br', 'financeiro@galtecom.com.br', 'gfurtado@galtecom.com.br']
+    emails: ['edson@galtecom.com.br','financeiro@galtecom.com.br','gfurtado@galtecom.com.br']
   },
   engenharia: {
     nome: 'Engenharia/Desenvolvimento',
-    emails: ['engenharia@galtecom.com.br', 'desenvolvimento@galtecom.com.br']
+    emails: ['engenharia@galtecom.com.br','desenvolvimento@galtecom.com.br']
   },
   faturamento: {
     nome: 'Faturamento',
-    emails: ['adm@galtecom.com.br', 'financeiro@galtecom.com.br']
+    emails: ['adm@galtecom.com.br','financeiro@galtecom.com.br']
   },
   garantia: {
     nome: 'Garantia',
-    emails: ['garantia@galtecom.com.br', 'garantia1@galtecom.com.br', 'edson@galtecom.com.br']
+    emails: ['garantia@galtecom.com.br','garantia1@galtecom.com.br','edson@galtecom.com.br']
   }
 };
 
 /* ═══════════════════════════════════════════════════════════
-   3. ESTADO, HELPERS E TRANSCRIÇÃO DE ÁUDIO
+   3. ESTADO, HELPERS E TRANSCODIFICAÇÃO DE ÁUDIO
 ═══════════════════════════════════════════════════════════ */
 
 const conversasEmAndamento = new Map();
 const anexosDoUsuario = new Map();
+const protocolosRegistrados = new Map();  // Armazena os protocolos gerados por chat
 
 function gerarProtocolo() {
   const d = new Date();
@@ -120,7 +121,7 @@ function nomeSolicitante(msg) {
 }
 
 /* ───────────────────────────────────────────────────────────
-   3.1 TRANSCRIÇÃO DE ÁUDIO (UTILIZANDO GOOGLE CLOUD SPEECH)
+   3.1 TRANSCRIÇÃO DE ÁUDIO (GOOGLE CLOUD SPEECH)
 ──────────────────────────────────────────────────────────── */
 
 async function transcreverAudio(filePath) {
@@ -128,11 +129,9 @@ async function transcreverAudio(filePath) {
   const speech = require('@google-cloud/speech');
   const client = new speech.SpeechClient();
 
-  // Lê o arquivo de áudio e converte para base64
   const file = fs.readFileSync(filePath);
   const audioBytes = file.toString('base64');
 
-  // Para mensagens de voz do Telegram (formato OGG_OPUS)
   const audio = { content: audioBytes };
   const config = {
     encoding: 'OGG_OPUS',
@@ -230,10 +229,10 @@ async function consultarAgenteIA(mensagemUsuario, contextoConversa = []) {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   5. PLANILHA E E-MAIL (MANTÉM FUNCIONALIDADE ATUAL)
+   5. PLANILHA E E-MAIL (FUNCIONALIDADE ATUAL)
 ═══════════════════════════════════════════════════════════ */
 
-async function registrarChamado(proto, solicitante, solicitacao, categoria='Aguardando Classificação') {
+async function registrarChamado(proto, solicitante, solicitacao, categoria = 'Aguardando Classificação') {
   try {
     await sheets.spreadsheets.values.append({
       spreadsheetId: process.env.SHEET_ID,
@@ -313,55 +312,80 @@ KX3 Galtecom`,
 }
 
 /* ═══════════════════════════════════════════════════════════
-   6. PROCESSAMENTO PRINCIPAL COM IA - CORRIGIDO
+   6. PROCESSAMENTO PRINCIPAL COM IA - E FALLBACK MANUAL
 ═══════════════════════════════════════════════════════════ */
 
 async function processarMensagem(chatId, texto, solicitante) {
+  // Verifica se o usuário está perguntando pelo número do protocolo
+  if (/qual\s+n(ú|u)mero do protocolo/i.test(texto)) {
+    if (protocolosRegistrados.has(chatId)) {
+      const proto = protocolosRegistrados.get(chatId);
+      await bot.sendMessage(chatId, `📋 O número do seu protocolo é: ${proto}`);
+      return;
+    } else {
+      await bot.sendMessage(chatId, `❌ Nenhum protocolo foi gerado para sua solicitação ainda.`);
+      return;
+    }
+  }
+  
+  // Se o usuário solicita explicitamente a abertura de um CAR/chamado
+  if (/abrir\s+(um\s+)?(car|chamado)/i.test(texto)) {
+    const proto = gerarProtocolo();
+    protocolosRegistrados.set(chatId, proto);
+    const conversa = conversasEmAndamento.get(chatId) || [];
+    const solicitacaoCompleta = conversa.length > 0 ? conversa.map(m => m.content).join(' | ') : texto;
+    // Aqui, definimos a categoria manual; no exemplo, para instalação de sensor, escolhemos engenharia.
+    const categoryKey = "engenharia";
+    
+    await registrarChamado(proto, solicitante, solicitacaoCompleta, categorias[categoryKey].nome);
+    await enviarEmailAbertura(proto, solicitante, categoryKey, solicitacaoCompleta, anexosDoUsuario.get(chatId) || []);
+    
+    await bot.sendMessage(chatId, 
+        `✅ *Chamado criado com sucesso!*\n\n📋 Protocolo: *${proto}*\n🏢 Setor: *${categorias[categoryKey].nome}*\n📧 E-mail enviado à equipe responsável.\n\n📱 Guarde este número de protocolo para acompanhar seu chamado.`,
+        { parse_mode: 'Markdown' }
+    );
+    
+    conversasEmAndamento.delete(chatId);
+    anexosDoUsuario.delete(chatId);
+    return;
+  }
+  
+  // Caso contrário, continua com a integração via IA.
   const conversa = conversasEmAndamento.get(chatId) || [];
   const anexos = anexosDoUsuario.get(chatId) || [];
-
+  
   try {
-    // Consultar agente IA
     const respostaIA = await consultarAgenteIA(texto, conversa);
-    
     console.log('Resposta estruturada da IA:', JSON.stringify(respostaIA, null, 2));
     
-    // Atualizar contexto da conversa
     conversa.push({ role: 'user', content: texto });
     conversa.push({ role: 'assistant', content: respostaIA.resposta_usuario });
     conversasEmAndamento.set(chatId, conversa);
-
-    // Enviar somente a resposta amigável para o usuário
+    
     await bot.sendMessage(chatId, respostaIA.resposta_usuario);
-
-    // Processar ação recomendada pelo agente
+    
     if (respostaIA.proxima_acao === 'gerar_protocolo' && respostaIA.categoria) {
       const proto = gerarProtocolo();
-      const cat = categorias[respostaIA.categoria];
-      
-      if (cat) {
-        const solicitacaoCompleta = conversa
+      protocolosRegistrados.set(chatId, proto);
+      const solicitacaoCompleta = conversa
           .filter(msg => msg.role === 'user')
           .map(msg => msg.content)
           .join(' | ');
-        
-        await registrarChamado(proto, solicitante, solicitacaoCompleta, cat.nome);
-        await enviarEmailAbertura(proto, solicitante, respostaIA.categoria, solicitacaoCompleta, anexos, respostaIA.informacoes_coletadas);
-        
-        await bot.sendMessage(chatId, 
-          `✅ *Chamado criado com sucesso!*\n\n📋 Protocolo: *${proto}*\n🏢 Setor: *${cat.nome}*\n📧 E-mail enviado à equipe responsável.\n\n📱 Guarde este número de protocolo para acompanhar seu chamado.`,
+      
+      await registrarChamado(proto, solicitante, solicitacaoCompleta, categorias[respostaIA.categoria].nome);
+      await enviarEmailAbertura(proto, solicitante, respostaIA.categoria, solicitacaoCompleta, anexos, respostaIA.informacoes_coletadas);
+      
+      await bot.sendMessage(chatId, 
+          `✅ *Chamado criado com sucesso!*\n\n📋 Protocolo: *${proto}*\n🏢 Setor: *${categorias[respostaIA.categoria].nome}*\n📧 E-mail enviado à equipe responsável.\n\n📱 Guarde este número de protocolo para acompanhar seu chamado.`,
           { parse_mode: 'Markdown' }
-        );
-        
-        // Limpar estado
-        conversasEmAndamento.delete(chatId);
-        anexosDoUsuario.delete(chatId);
-      }
+      );
+      
+      conversasEmAndamento.delete(chatId);
+      anexosDoUsuario.delete(chatId);
     } else if (respostaIA.proxima_acao === 'menu_setores') {
       mostrarMenuCategorias(chatId);
     }
-    // Caso a ação seja "continuar_conversa" ou "pedir_mais_info", apenas aguarda a próxima mensagem.
-
+    
   } catch (error) {
     console.error('Erro no processamento da mensagem:', error);
     await bot.sendMessage(chatId, '❌ Ops! Ocorreu um erro inesperado. Tente novamente em alguns minutos.');
@@ -455,7 +479,7 @@ bot.on('video', async msg => {
   }
 });
 
-// Novo handler para mensagens de voz (transcrição)
+// Handler para mensagens de voz (transcrição)
 bot.on('voice', async msg => {
   const chatId = msg.chat.id;
   const voice = msg.voice;
@@ -471,10 +495,7 @@ bot.on('voice', async msg => {
   }
 });
 
-/* ═══════════════════════════════════════════════════════════
-   8. MENU MANUAL (FALLBACK)
-═══════════════════════════════════════════════════════════ */
-
+// Menu manual (fallback)
 function mostrarMenuCategorias(chatId) {
   bot.sendMessage(chatId, '🤖 Para prosseguir, selecione o setor mais adequado para sua solicitação:', {
     reply_markup: {
@@ -506,6 +527,7 @@ bot.on('callback_query', async q => {
     
     if (cat) {
       const proto = gerarProtocolo();
+      protocolosRegistrados.set(chatId, proto);
       const solicitacaoCompleta = conversa
         .filter(msg => msg.role === 'user')
         .map(msg => msg.content)
@@ -519,7 +541,6 @@ bot.on('callback_query', async q => {
         { chat_id: chatId, message_id: q.message.message_id, parse_mode: 'Markdown' }
       );
       
-      // Limpar estado
       conversasEmAndamento.delete(chatId);
       anexosDoUsuario.delete(chatId);
     }
@@ -529,7 +550,7 @@ bot.on('callback_query', async q => {
 });
 
 /* ═══════════════════════════════════════════════════════════
-   9. INICIALIZAÇÃO
+   8. INICIALIZAÇÃO
 ═══════════════════════════════════════════════════════════ */
 
 console.log('🤖 Bot CAR KX3 com IA iniciado!');
@@ -542,5 +563,5 @@ console.log('   • Registro na planilha Google Sheets');
 console.log('   • Envio de e-mails com anexos');
 console.log('   • Suporte a fotos, documentos, áudios e vídeos');
 console.log('   • Transcrição de mensagens de voz');
-console.log('   • Tratamento inteligente de respostas IA');
+console.log('   • Fallback manual para abertura de chamados e consulta de protocolo');
 console.log('📞 Aguardando mensagens...');
