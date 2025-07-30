@@ -4,20 +4,35 @@ const TelegramBot = require('node-telegram-bot-api');
 
 const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
 
-const auth = new google.auth.GoogleAuth({
-  keyFile: 'credentials.json',
-  scopes: ['https://www.googleapis.com/auth/spreadsheets']
-});
+// Configuração de autenticação usando variável de ambiente
+let auth;
+try {
+  if (process.env.GOOGLE_CREDENTIALS) {
+    // Parse das credenciais da variável de ambiente
+    const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS);
+    auth = new google.auth.GoogleAuth({
+      credentials: credentials,
+      scopes: ['https://www.googleapis.com/auth/spreadsheets']
+    });
+  } else {
+    // Fallback para arquivo local (desenvolvimento)
+    auth = new google.auth.GoogleAuth({
+      keyFile: 'credentials.json',
+      scopes: ['https://www.googleapis.com/auth/spreadsheets']
+    });
+  }
+} catch (error) {
+  console.error('Erro na configuração de autenticação:', error);
+}
+
 const sheets = google.sheets({ version: 'v4', auth });
 
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text || '<arquivo recebido>';
 
-  // Resposta no Telegram
   await bot.sendMessage(chatId, `Recebi sua mensagem: "${text}". Em breve abrirei seu chamado!`);
 
-  // Teste de leitura no Sheets
   try {
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: process.env.SHEET_ID,
@@ -33,3 +48,4 @@ bot.on('message', async (msg) => {
 });
 
 console.log('Bot iniciado...');
+
