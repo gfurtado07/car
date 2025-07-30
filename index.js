@@ -282,11 +282,21 @@ async function handleAttachment(msg, tipo, campoArquivo) {
 
 // Fotos
 bot.on('photo', async msg => {
-  // pega o melhor tamanho disponível
+  // "msg.photo" é um array (várias resoluções); pegue a de maior tamanho
   const sizes = msg.photo;
-  const arquivo = sizes[sizes.length - 1];
-  arquivo.file_name = 'imagem.jpg';
-  await handleAttachment({ ...msg, photo: null, file_id: arquivo.file_id, file_unique_id: arquivo.file_unique_id, file_name: arquivo.file_name }, 'foto', 'file_id');
+  const arquivo = sizes[sizes.length - 1]; // pega a maior resolução
+  // Defina um nome de arquivo genérico para imagem
+  const fileName = `foto_${arquivo.file_unique_id}.jpg`;
+  // Use handleAttachment com os parâmetros genéricos
+  try {
+    const p = await baixarArquivoTelegram(arquivo.file_id, fileName);
+    const chatId = msg.chat.id;
+    if (!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId, []);
+    anexosDoUsuario.get(chatId).push(p);
+    await bot.sendMessage(chatId, `📎 Foto recebida: ${fileName}\n(Envie sua mensagem de texto para finalizar o chamado.)`);
+  } catch {
+    await bot.sendMessage(msg.chat.id, `❌ Não consegui baixar sua foto!`);
+  }
 });
 // Documentos
 bot.on('document', msg => handleAttachment(msg, 'documento', 'document'));
