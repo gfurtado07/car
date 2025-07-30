@@ -45,7 +45,7 @@ const transporter = nodemailer.createTransport({
   }
 });
 
-// Pareto IA Agent
+// Agente IA Pareto
 const PARETO_API_URL = 'https://tess.pareto.io/api';
 const PARETO_TOKEN = process.env.PARETO_API_TOKEN;
 const PARETO_AGENT_ID = process.env.PARETO_AGENT_ID;
@@ -57,40 +57,40 @@ const PARETO_AGENT_ID = process.env.PARETO_AGENT_ID;
 const categorias = {
   estoque_logistica: {
     nome: 'Estoque/Logística',
-    emails: ['logistica@galtecom.com.br','estoque@galtecom.com.br','financeiro@galtecom.com.br']
+    emails: ['logistica@galtecom.com.br', 'estoque@galtecom.com.br', 'financeiro@galtecom.com.br']
   },
   financeiro: {
     nome: 'Financeiro',
-    emails: ['contabil@galtecom.com.br','contabil.nav@galtecom.com.br','financeiro@galtecom.com.br']
+    emails: ['contabil@galtecom.com.br', 'contabil.nav@galtecom.com.br', 'financeiro@galtecom.com.br']
   },
   comercial: {
     nome: 'Comercial',
-    emails: ['gfurtado@galtecom.com.br','financeiro@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br', 'financeiro@galtecom.com.br']
   },
   marketing: {
     nome: 'Marketing',
-    emails: ['marketing@galtecom.com.br','marketing.nav@galtecom.com.br','gfurtado@galtecom.com.br']
+    emails: ['marketing@galtecom.com.br', 'marketing.nav@galtecom.com.br', 'gfurtado@galtecom.com.br']
   },
   diretoria: {
     nome: 'Diretoria',
-    emails: ['edson@galtecom.com.br','financeiro@galtecom.com.br','gfurtado@galtecom.com.br']
+    emails: ['edson@galtecom.com.br', 'financeiro@galtecom.com.br', 'gfurtado@galtecom.com.br']
   },
   engenharia: {
     nome: 'Engenharia/Desenvolvimento',
-    emails: ['engenharia@galtecom.com.br','desenvolvimento@galtecom.com.br']
+    emails: ['engenharia@galtecom.com.br', 'desenvolvimento@galtecom.com.br']
   },
   faturamento: {
     nome: 'Faturamento',
-    emails: ['adm@galtecom.com.br','financeiro@galtecom.com.br']
+    emails: ['adm@galtecom.com.br', 'financeiro@galtecom.com.br']
   },
   garantia: {
     nome: 'Garantia',
-    emails: ['garantia@galtecom.com.br','garantia1@galtecom.com.br','edson@galtecom.com.br']
+    emails: ['garantia@galtecom.com.br', 'garantia1@galtecom.com.br', 'edson@galtecom.com.br']
   }
 };
 
 /* ═══════════════════════════════════════════════════════════
-   3. ESTADO E HELPERS
+   3. ESTADO, HELPERS E TRANSCRIÇÃO DE ÁUDIO
 ═══════════════════════════════════════════════════════════ */
 
 const conversasEmAndamento = new Map();
@@ -99,24 +99,57 @@ const anexosDoUsuario = new Map();
 function gerarProtocolo() {
   const d = new Date();
   return d.getFullYear().toString() +
-    String(d.getMonth()+1).padStart(2,'0') +
-    String(d.getDate()).padStart(2,'0') + '-' +
-    String(d.getHours()).padStart(2,'0') +
-    String(d.getMinutes()).padStart(2,'0');
+    String(d.getMonth() + 1).padStart(2, '0') +
+    String(d.getDate()).padStart(2, '0') + '-' +
+    String(d.getHours()).padStart(2, '0') +
+    String(d.getMinutes()).padStart(2, '0');
 }
 
 function dataHoraBR() {
-  return new Date().toLocaleString('pt-BR',{ 
-    timeZone:'America/Sao_Paulo', 
-    day:'2-digit',month:'2-digit',year:'numeric',
-    hour:'2-digit',minute:'2-digit' 
+  return new Date().toLocaleString('pt-BR', { 
+    timeZone: 'America/Sao_Paulo', 
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit'
   });
 }
 
 function nomeSolicitante(msg) {
-  const { first_name='', last_name='', username='' } = msg.from;
-  return (first_name||last_name) ? `${first_name} ${last_name}`.trim() :
+  const { first_name = '', last_name = '', username = '' } = msg.from;
+  return (first_name || last_name) ? `${first_name} ${last_name}`.trim() :
          username ? `@${username}` : `User ${msg.from.id}`;
+}
+
+/* ───────────────────────────────────────────────────────────
+   3.1 TRANSCRIÇÃO DE ÁUDIO (UTILIZANDO GOOGLE CLOUD SPEECH)
+──────────────────────────────────────────────────────────── */
+
+async function transcreverAudio(filePath) {
+  // Requer a dependência @google-cloud/speech instalada
+  const speech = require('@google-cloud/speech');
+  const client = new speech.SpeechClient();
+
+  // Lê o arquivo de áudio e converte para base64
+  const file = fs.readFileSync(filePath);
+  const audioBytes = file.toString('base64');
+
+  // Para mensagens de voz do Telegram (formato OGG_OPUS)
+  const audio = { content: audioBytes };
+  const config = {
+    encoding: 'OGG_OPUS',
+    sampleRateHertz: 48000,
+    languageCode: 'pt-BR'
+  };
+
+  const request = {
+    audio: audio,
+    config: config
+  };
+
+  const [response] = await client.recognize(request);
+  const transcription = response.results
+    .map(result => result.alternatives[0].transcript)
+    .join('\n');
+  return transcription;
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -125,16 +158,11 @@ function nomeSolicitante(msg) {
 
 function tentarParsearJSON(texto) {
   try {
-    // Remove quebras de linha e espaços desnecessários
     const textoLimpo = texto.trim();
-    
-    // Tenta encontrar JSON no texto
     const jsonMatch = textoLimpo.match(/\{[\s\S]*\}/);
     if (jsonMatch) {
       return JSON.parse(jsonMatch[0]);
     }
-    
-    // Se não encontrou JSON, retorna estrutura padrão
     return null;
   } catch (error) {
     console.log('Não foi possível parsear JSON da resposta IA:', error.message);
@@ -171,16 +199,11 @@ async function consultarAgenteIA(mensagemUsuario, contextoConversa = []) {
     if (response.data && response.data.responses && response.data.responses[0]) {
       const output = response.data.responses[0].output;
       console.log('Resposta bruta do agente:', output);
-      
-      // Tentar extrair JSON da resposta
       const jsonResponse = tentarParsearJSON(output);
-      
       if (jsonResponse && jsonResponse.resposta_usuario) {
-        // Se encontrou JSON válido, usar ele
         console.log('JSON parsado com sucesso:', jsonResponse);
         return jsonResponse;
       } else {
-        // Se não encontrou JSON válido, usar resposta como texto simples
         console.log('Usando resposta como texto simples');
         return {
           acao: 'responder',
@@ -192,7 +215,6 @@ async function consultarAgenteIA(mensagemUsuario, contextoConversa = []) {
         };
       }
     }
-
     throw new Error('Resposta inválida do agente');
   } catch (error) {
     console.error('Erro ao consultar agente IA:', error.message);
@@ -216,12 +238,12 @@ async function registrarChamado(proto, solicitante, solicitacao, categoria='Agua
     await sheets.spreadsheets.values.append({
       spreadsheetId: process.env.SHEET_ID,
       range: `${process.env.SHEET_NAME}!A:H`,
-      valueInputOption:'USER_ENTERED',
-      resource:{ values:[[proto,dataHoraBR(),solicitante,categoria,solicitacao,'','Aberto','']] }
+      valueInputOption: 'USER_ENTERED',
+      resource: { values: [[proto, dataHoraBR(), solicitante, categoria, solicitacao, '', 'Aberto', '']] }
     });
     console.log(`Chamado registrado: ${proto}`);
     return true;
-  } catch(err) {
+  } catch (err) {
     console.error('Erro ao registrar chamado:', err);
     return false;
   }
@@ -229,14 +251,14 @@ async function registrarChamado(proto, solicitante, solicitacao, categoria='Agua
 
 async function baixarArquivoTelegram(fileId, nomeOriginal) {
   return new Promise((resolve, reject) => {
-    bot.getFileLink(fileId).then(link=>{
+    bot.getFileLink(fileId).then(link => {
       const filename = `${Date.now()}_${nomeOriginal}`;
-      const dest = '/tmp/'+filename;
+      const dest = '/tmp/' + filename;
       const file = fs.createWriteStream(dest);
-      https.get(link, resp=>{
+      https.get(link, resp => {
         resp.pipe(file);
-        file.on('finish',()=>file.close(()=>resolve(dest)));
-      }).on('error',err=>{
+        file.on('finish', () => file.close(() => resolve(dest)));
+      }).on('error', err => {
         fs.unlinkSync(dest);
         reject(err);
       });
@@ -244,11 +266,10 @@ async function baixarArquivoTelegram(fileId, nomeOriginal) {
   });
 }
 
-async function enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacao, anexos=[], informacoesColetadas={}) {
+async function enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacao, anexos = [], informacoesColetadas = {}) {
   const cat = categorias[categoriaKey];
   if (!cat) return false;
   
-  // Montar informações adicionais coletadas pela IA
   let infoExtra = '';
   if (informacoesColetadas && Object.keys(informacoesColetadas).length > 0) {
     infoExtra = '\n\nInformações coletadas:\n';
@@ -277,17 +298,15 @@ Por favor, verifiquem e deem seguimento ao chamado.
 Atenciosamente,
 CAR – Central de Atendimento ao Representante
 KX3 Galtecom`,
-    attachments: anexos.map(c=>({ filename:path.basename(c), path:c }))
+    attachments: anexos.map(c => ({ filename: path.basename(c), path: c }))
   };
   
   try {
     await transporter.sendMail(mail);
-    anexos.forEach(c=> fs.unlink(c, err => {
-      if (err) console.error('Erro ao deletar arquivo:', err);
-    }));
+    anexos.forEach(c => fs.unlink(c, err => { if (err) console.error('Erro ao deletar arquivo:', err); }));
     console.log(`E-mail enviado ao setor: ${cat.nome}`);
     return true;
-  } catch(err){
+  } catch (err) {
     console.error('Erro ao enviar e-mail:', err);
     return false;
   }
@@ -305,7 +324,6 @@ async function processarMensagem(chatId, texto, solicitante) {
     // Consultar agente IA
     const respostaIA = await consultarAgenteIA(texto, conversa);
     
-    // Log para debug (não enviar ao usuário)
     console.log('Resposta estruturada da IA:', JSON.stringify(respostaIA, null, 2));
     
     // Atualizar contexto da conversa
@@ -313,7 +331,7 @@ async function processarMensagem(chatId, texto, solicitante) {
     conversa.push({ role: 'assistant', content: respostaIA.resposta_usuario });
     conversasEmAndamento.set(chatId, conversa);
 
-    // ENVIAR APENAS A RESPOSTA AMIGÁVEL PARA O USUÁRIO
+    // Enviar somente a resposta amigável para o usuário
     await bot.sendMessage(chatId, respostaIA.resposta_usuario);
 
     // Processar ação recomendada pelo agente
@@ -322,7 +340,6 @@ async function processarMensagem(chatId, texto, solicitante) {
       const cat = categorias[respostaIA.categoria];
       
       if (cat) {
-        // Registrar chamado
         const solicitacaoCompleta = conversa
           .filter(msg => msg.role === 'user')
           .map(msg => msg.content)
@@ -341,10 +358,9 @@ async function processarMensagem(chatId, texto, solicitante) {
         anexosDoUsuario.delete(chatId);
       }
     } else if (respostaIA.proxima_acao === 'menu_setores') {
-      // Fallback para menu manual se IA não conseguir classificar
       mostrarMenuCategorias(chatId);
     }
-    // Se proxima_acao for 'continuar_conversa' ou 'pedir_mais_info', não fazer nada além de esperar próxima mensagem
+    // Caso a ação seja "continuar_conversa" ou "pedir_mais_info", apenas aguarda a próxima mensagem.
 
   } catch (error) {
     console.error('Erro no processamento da mensagem:', error);
@@ -374,7 +390,7 @@ bot.on('text', async msg => {
 bot.on('photo', async msg => {
   const chatId = msg.chat.id;
   const sizes = msg.photo;
-  const arq = sizes[sizes.length-1];
+  const arq = sizes[sizes.length - 1];
   const nome = `foto_${arq.file_unique_id}.jpg`;
   
   try {
@@ -436,6 +452,22 @@ bot.on('video', async msg => {
   } catch (error) {
     console.error('Erro ao processar vídeo:', error);
     await bot.sendMessage(chatId, '❌ Não consegui processar seu vídeo. Tente novamente.');
+  }
+});
+
+// Novo handler para mensagens de voz (transcrição)
+bot.on('voice', async msg => {
+  const chatId = msg.chat.id;
+  const voice = msg.voice;
+  const nome = `voice_${voice.file_unique_id}.ogg`;
+  
+  try {
+    const caminho = await baixarArquivoTelegram(voice.file_id, nome);
+    const transcript = await transcreverAudio(caminho);
+    await bot.sendMessage(chatId, `📝 Transcrição: ${transcript}`);
+  } catch (error) {
+    console.error('Erro ao transcrever voz:', error);
+    await bot.sendMessage(chatId, '❌ Não consegui transcrever sua mensagem de voz. Tente novamente.');
   }
 });
 
@@ -509,5 +541,6 @@ console.log('   • Geração de protocolos únicos');
 console.log('   • Registro na planilha Google Sheets');
 console.log('   • Envio de e-mails com anexos');
 console.log('   • Suporte a fotos, documentos, áudios e vídeos');
+console.log('   • Transcrição de mensagens de voz');
 console.log('   • Tratamento inteligente de respostas IA');
 console.log('📞 Aguardando mensagens...');
