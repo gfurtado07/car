@@ -6,6 +6,8 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const axios = require('axios');
+const Imap = require('node-imap');
+const { simpleParser } = require('mailparser');
 
 /* ═══════════════════════════════════════════════════════════
    1. CONFIGURAÇÕES INICIAIS
@@ -90,12 +92,12 @@ const categorias = {
 };
 
 /* ═══════════════════════════════════════════════════════════
-   3. ESTADO, HELPERS E TRANSCRIÇÃO DE ÁUDIO
+   3. ESTADO, HELPERS, E TRANSCRIÇÃO DE ÁUDIO
 ═══════════════════════════════════════════════════════════ */
 
 const conversasEmAndamento = new Map();
 const anexosDoUsuario = new Map();
-const protocolosRegistrados = new Map(); // Armazena protocolos gerados por chat
+const protocolosRegistrados = new Map(); // Armazena o protocolo associado a cada chat
 
 function gerarProtocolo() {
   const d = new Date();
@@ -152,7 +154,7 @@ async function transcreverAudio(filePath) {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   4. COMUNICAÇÃO COM AGENTE IA (PARETO) - CORRIGIDA
+   4. COMUNICAÇÃO COM AGENTE IA (PARETO) – CORRIGIDA
 ═══════════════════════════════════════════════════════════ */
 
 function tentarParsearJSON(texto) {
@@ -312,7 +314,7 @@ KX3 Galtecom`,
 }
 
 /* ═══════════════════════════════════════════════════════════
-   6. PROCESSAMENTO PRINCIPAL COM IA - E FALLBACK MANUAL
+   6. PROCESSAMENTO PRINCIPAL COM IA – E FALLBACK MANUAL
 ═══════════════════════════════════════════════════════════ */
 
 async function processarMensagem(chatId, texto, solicitante) {
@@ -512,30 +514,21 @@ bot.on('voice', async msg => {
   }
 });
 
-// Menu manual (fallback)
-function mostrarMenuCategorias(chatId) {
-  bot.sendMessage(chatId, '🤖 Para prosseguir, selecione o setor mais adequado para sua solicitação:', {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '📦 Estoque/Logística', callback_data: `manual_estoque_logistica` }],
-        [{ text: '💰 Financeiro', callback_data: `manual_financeiro` }],
-        [{ text: '🤝 Comercial', callback_data: `manual_comercial` }],
-        [{ text: '📢 Marketing', callback_data: `manual_marketing` }],
-        [{ text: '👔 Diretoria', callback_data: `manual_diretoria` }],
-        [{ text: '🔧 Engenharia', callback_data: `manual_engenharia` }],
-        [{ text: '📊 Faturamento', callback_data: `manual_faturamento` }],
-        [{ text: '🛡️ Garantia', callback_data: `manual_garantia` }]
-      ]
-    }
-  });
-}
-
-// Callback para seleção manual
+// Callback para interações via inline keyboard
 bot.on('callback_query', async q => {
   const chatId = q.message.chat.id;
   const data = q.data;
   
-  if (data.startsWith('manual_')) {
+  if (data.startsWith('finalizar_')) {
+    const proto = data.replace('finalizar_', '');
+    // Aqui você pode implementar uma lógica para atualizar o status do chamado para "Finalizado" no Google Sheets, se desejar.
+    await bot.sendMessage(chatId, `✅ Seu chamado de protocolo ${proto} foi finalizado. Obrigado por utilizar o CAR!`);
+    protocolosRegistrados.delete(chatId); // Remove da lista de chamados abertos
+  } else if (data.startsWith('mais_')) {
+    const proto = data.replace('mais_', '');
+    await bot.sendMessage(chatId, `🔄 O chamado de protocolo ${proto} permanecerá aberto. Por favor, envie os detalhes adicionais que deseja incluir.`);
+    // O atendimento continua; o usuário poderá enviar novas mensagens que serão anexadas ao mesmo protocolo.
+  } else if (data.startsWith('manual_')) {
     const categoriaKey = data.replace('manual_', '');
     const cat = categorias[categoriaKey];
     const solicitante = nomeSolicitante(q.message);
@@ -562,13 +555,111 @@ bot.on('callback_query', async q => {
       anexosDoUsuario.delete(chatId);
     }
   }
-  
+
   await bot.answerCallbackQuery(q.id);
 });
 
 /* ═══════════════════════════════════════════════════════════
-   8. INICIALIZAÇÃO
+   8. MONITOR DE EMAILS (ATUALIZAÇÕES DE CHAMADOS)
 ═══════════════════════════════════════════════════════════ */
+
+function startEmailMonitor() {
+  const imapConfig = {
+    user: process.env.IMAP_USER,
+    password: process.env.IMAP_PASS,
+    host: process.env.IMAP_HOST,
+    port: Number(process.env.IMAP_PORT) || 993,
+    tls: true
+  };
+
+  const imap = new Imap(imapConfig);
+
+  imap.once('ready', () => {
+    imap.openBox('INBOX', false, function (err, box) {
+      if (err) {
+        console.error('Erro ao abrir a caixa de entrada:', err);
+        return;
+      }
+
+      // Escuta por novas mensagens
+      imap.on('mail', () => {
+        imap.search(['UNSEEN'], (err, results) => {
+          if (err) {
+            console.error('Erro na busca de emails:', err);
+            return;
+          }
+          if (results.length) {
+            const fetch = imap.fetch(results, { bodies: '', markSeen: true });
+            fetch.on('message', (msg, seqno) => {
+              let emailBuffer = '';
+              msg.on('body', stream => {
+                stream.on('data', chunk => {
+                  emailBuffer += chunk.toString('utf8');
+                });
+              });
+              msg.once('end', async () => {
+                try {
+                  const mail = await simpleParser(emailBuffer);
+                  const subject = mail.subject || '';
+                  // Supõe que o assunto contenha "Protocolo: 20250730-1545" ou similar
+                  const match = subject.match(/Protocolo\s*[:\-]\s*(\d{8}-\d{4})/i);
+                  if (match) {
+                    const proto = match[1];
+                    let targetChat = null;
+                    // Procura pelo chat que possui esse protocolo
+                    for (const [chatId, protocol] of protocolosRegistrados.entries()) {
+                      if (protocol === proto) {
+                        targetChat = chatId;
+                        break;
+                      }
+                    }
+                    if (targetChat) {
+                      await bot.sendMessage(targetChat, `📧 Atualização no chamado de protocolo ${proto}:\n\n${mail.text.trim()}\n\nDeseja finalizar o CAR ou fazer mais alguma solicitação?`, {
+                        reply_markup: {
+                          inline_keyboard: [
+                            [{ text: 'Finalizar CAR', callback_data: `finalizar_${proto}` }],
+                            [{ text: 'Mais Solicitação', callback_data: `mais_${proto}` }]
+                          ]
+                        }
+                      });
+                    } else {
+                      console.log(`Protocolo ${proto} não associado a nenhum chat.`);
+                    }
+                  } else {
+                    console.log("Email não contém protocolo na linha de assunto.");
+                  }
+                } catch (e) {
+                  console.error("Erro ao processar email:", e);
+                }
+              });
+            });
+
+            fetch.once('error', error => {
+              console.error('Erro no fetch do email:', error);
+            });
+          }
+        });
+      });
+    });
+  });
+
+  imap.once('error', err => {
+    console.error('Erro IMAP:', err);
+  });
+
+  imap.once('end', () => {
+    console.log('Conexão IMAP encerrada. Tentando reconectar em 60 segundos...');
+    setTimeout(startEmailMonitor, 60000);
+  });
+
+  imap.connect();
+}
+
+/* ═══════════════════════════════════════════════════════════
+   9. INICIALIZAÇÃO
+═══════════════════════════════════════════════════════════ */
+
+startEmailMonitor();
 
 console.log('🤖 Bot CAR KX3 com IA iniciado!');
 console.log('🧠 Agente IA integrado com Pareto');
@@ -581,4 +672,6 @@ console.log('   • Envio de e-mails com anexos');
 console.log('   • Suporte a fotos, documentos, áudios e vídeos');
 console.log('   • Transcrição de mensagens de voz');
 console.log('   • Fallback manual para abertura de chamados e consulta de protocolo');
+console.log('   • Monitoramento de respostas de e-mail com atualização de chamados');
 console.log('📞 Aguardando mensagens...');
+
