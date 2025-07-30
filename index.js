@@ -1,16 +1,20 @@
+/************************************************************
+ *  CAR KX3 Bot – Telegram + Google Sheets + Email
+ ***********************************************************/
 require('dotenv').config();
 const { google } = require('googleapis');
 const TelegramBot = require('node-telegram-bot-api');
+const nodemailer = require('nodemailer');
 
-const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
-
-// Configuração de autenticação
+/*───────────────────────────────────────────────────────────
+  1. CONFIGURAÇÃO GOOGLE SHEETS
+───────────────────────────────────────────────────────────*/
 let auth;
 try {
   if (process.env.GOOGLE_CREDENTIALS) {
     const credentials = JSON.parse(process.env.GOOGLE_CREDENTIALS);
     auth = new google.auth.GoogleAuth({
-      credentials: credentials,
+      credentials,
       scopes: ['https://www.googleapis.com/auth/spreadsheets']
     });
   } else {
@@ -19,386 +23,392 @@ try {
       scopes: ['https://www.googleapis.com/auth/spreadsheets']
     });
   }
-} catch (error) {
-  console.error('Erro na configuração de autenticação:', error);
+} catch (err) {
+  console.error('Erro na autenticação Google:', err);
 }
-
 const sheets = google.sheets({ version: 'v4', auth });
 
-// Definição das categorias e setores da KX3
+/*───────────────────────────────────────────────────────────
+  2. CONFIGURAÇÃO TELEGRAM
+───────────────────────────────────────────────────────────*/
+const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
+
+/*───────────────────────────────────────────────────────────
+  3. CONFIGURAÇÃO SMTP (nodemailer)
+───────────────────────────────────────────────────────────*/
+const transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST,
+  port: Number(process.env.SMTP_PORT),
+  secure: Number(process.env.SMTP_PORT) === 465, // true se 465
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS
+  }
+});
+
+/*───────────────────────────────────────────────────────────
+  4. CATEGORIAS / PALAVRAS-CHAVE
+───────────────────────────────────────────────────────────*/
 const categorias = {
-  "estoque_logistica": {
-    nome: "Estoque/Logística",
-    emails: ["logistica@galtecom.com.br", "estoque@galtecom.com.br", "financeiro@galtecom.com.br"],
+  estoque_logistica: {
+    nome: 'Estoque/Logística',
+    emails: [
+      'logistica@galtecom.com.br',
+      'estoque@galtecom.com.br',
+      'financeiro@galtecom.com.br'
+    ],
     palavrasChave: [
-      "rastreio", "rastrear", "pedido", "entrega", "transportadora", "prazo", "atraso", "envio", "remessa",
-      "comprovante", "mercadoria", "chegou", "não chegou", "onde está", "distribuidora"
+      'rastreio','rastrear','pedido','entrega','transportadora',
+      'prazo','atraso','envio','remessa',
+      'comprovante','mercadoria','chegou','não chegou','onde está'
     ],
     prioridade: 3
   },
-  "financeiro": {
-    nome: "Financeiro",
-    emails: ["contabil@galtecom.com.br", "contabil.nav@galtecom.com.br", "financeiro@galtecom.com.br"],
+  financeiro: {
+    nome: 'Financeiro',
+    emails: [
+      'contabil@galtecom.com.br',
+      'contabil.nav@galtecom.com.br',
+      'financeiro@galtecom.com.br'
+    ],
     palavrasChave: [
-      "segunda via", "boleto", "prorrogação", "pagamento", "fatura", "cobrança", "vencimento",
-      "não recebeu", "boletos", "títulos", "prorrogar", "dias"
+      'segunda via','boleto','prorrogação','pagamento','fatura',
+      'cobrança','vencimento','boletos','títulos','prorrogar','dias'
     ],
     prioridade: 2,
     isCoringa: true
   },
-  "comercial": {
-    nome: "Comercial",
-    emails: ["gfurtado@galtecom.com.br", "financeiro@galtecom.com.br"],
+  comercial: {
+    nome: 'Comercial',
+    emails: ['gfurtado@galtecom.com.br','financeiro@galtecom.com.br'],
     palavrasChave: [
-      "preços", "concorrência", "acordado", "faturou", "bonificação", "compensar", "valor",
-      "reclamando", "rádios", "acima", "próximo pedido"
+      'preços','concorrência','acordado','faturou','bonificação',
+      'compensar','valor','reclamando','rádios','próximo pedido'
     ],
     prioridade: 1
   },
-  "marketing": {
-    nome: "Marketing",
-    emails: ["marketing@galtecom.com.br", "marketing.nav@galtecom.com.br", "gfurtado@galtecom.com.br"],
+  marketing: {
+    nome: 'Marketing',
+    emails: [
+      'marketing@galtecom.com.br',
+      'marketing.nav@galtecom.com.br',
+      'gfurtado@galtecom.com.br'
+    ],
     palavrasChave: [
-      "fotos", "vídeos", "produto", "flyers", "lançamento", "fundo branco", "diferenciais",
-      "câmeras", "vídeo", "imagens", "material", "KC360", "KRC1610"
+      'fotos','vídeos','produto','flyers','lançamento','fundo branco',
+      'diferenciais','câmeras','imagens','material','kc360','krc1610'
     ],
     prioridade: 3
   },
-  "diretoria": {
-    nome: "Diretoria",
-    emails: ["edson@galtecom.com.br", "financeiro@galtecom.com.br", "gfurtado@galtecom.com.br"],
+  diretoria: {
+    nome: 'Diretoria',
+    emails: ['edson@galtecom.com.br','financeiro@galtecom.com.br','gfurtado@galtecom.com.br'],
     palavrasChave: [
-      "reunião", "diretoria", "proprietário", "KX3", "insatisfeito", "resolver", "situação",
-      "diretor", "dono", "gerência"
+      'reunião','diretoria','proprietário','insatisfeito','resolver',
+      'situação','diretor','dono','gerência'
     ],
     prioridade: 1
   },
-  "engenharia": {
-    nome: "Engenharia/Desenvolvimento",
-    emails: ["engenharia@galtecom.com.br", "desenvolvimento@galtecom.com.br"],
+  engenharia: {
+    nome: 'Engenharia/Desenvolvimento',
+    emails: ['engenharia@galtecom.com.br','desenvolvimento@galtecom.com.br'],
     palavrasChave: [
-      "manual", "instalação", "dificuldades", "sensor", "problemas", "funcionamento",
-      "técnico", "especificação", "configuração", "KRC5000", "KXS199A", "KRC4100"
+      'manual','instalação','dificuldades','sensor','problemas',
+      'funcionamento','técnico','especificação','configuração',
+      'krc5000','kxs199a','krc4100'
     ],
     prioridade: 1
   },
-  "faturamento": {
-    nome: "Faturamento",
-    emails: ["adm@galtecom.com.br", "financeiro@galtecom.com.br"],
+  faturamento: {
+    nome: 'Faturamento',
+    emails: ['adm@galtecom.com.br','financeiro@galtecom.com.br'],
     palavrasChave: [
-      "CFOP", "CST", "faturou", "correto", "questionando", "nota fiscal",
-      "6202", "6308", "fiscal", "tributário"
+      'cfop','cst','faturou','correto','questionando',
+      'nota fiscal','6202','6308','fiscal','tributário'
     ],
     prioridade: 1
   },
-  "garantia": {
-    nome: "Garantia",
-    emails: ["garantia@galtecom.com.br", "garantia1@galtecom.com.br", "edson@galtecom.com.br"],
+  garantia: {
+    nome: 'Garantia',
+    emails: ['garantia@galtecom.com.br','garantia1@galtecom.com.br','edson@galtecom.com.br'],
     palavrasChave: [
-      "garantia", "aparelhos", "prazo", "1 ano", "defeito", "troca", "reparo",
-      "fora do prazo", "garantir"
+      'garantia','aparelhos','prazo','1 ano','defeito','troca',
+      'reparo','fora do prazo','garantir'
     ],
     prioridade: 1
   }
 };
 
-// Armazenar chamados pendentes de classificação
+/*───────────────────────────────────────────────────────────
+  5. HELPERS
+───────────────────────────────────────────────────────────*/
 const chamadosPendentes = new Map();
 
-// Função para gerar protocolo único
 function gerarProtocolo() {
-  const agora = new Date();
-  const ano = agora.getFullYear();
-  const mes = String(agora.getMonth() + 1).padStart(2, '0');
-  const dia = String(agora.getDate()).padStart(2, '0');
-  const hora = String(agora.getHours()).padStart(2, '0');
-  const minuto = String(agora.getMinutes()).padStart(2, '0');
-  
-  return `${ano}${mes}${dia}-${hora}${minuto}`;
+  const d = new Date();
+  return (
+    d.getFullYear().toString() +
+    String(d.getMonth() + 1).padStart(2, '0') +
+    String(d.getDate()).padStart(2, '0') +
+    '-' +
+    String(d.getHours()).padStart(2, '0') +
+    String(d.getMinutes()).padStart(2, '0')
+  );
 }
-
-// Função para formatar data/hora
-function formatarDataHora() {
-  const agora = new Date();
-  return agora.toLocaleString('pt-BR', {
+function dataHoraBR() {
+  return new Date().toLocaleString('pt-BR', {
     timeZone: 'America/Sao_Paulo',
-    day: '2-digit',
-    month: '2-digit', 
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit'
   });
 }
-
-// Função para obter nome do usuário
-function obterNomeSolicitante(msg) {
-  const firstName = msg.from.first_name || '';
-  const lastName = msg.from.last_name || '';
-  const username = msg.from.username || '';
-  
-  if (firstName && lastName) {
-    return `${firstName} ${lastName}`;
-  } else if (firstName) {
-    return firstName;
-  } else if (username) {
-    return `@${username}`;
-  } else {
-    return `User ${msg.from.id}`;
-  }
+function nomeSolicitante(msg) {
+  const { first_name = '', last_name = '', username = '' } = msg.from;
+  return first_name || last_name ? `${first_name} ${last_name}`.trim() :
+         username ? `@${username}` : `User ${msg.from.id}`;
 }
 
-// Função para classificar mensagem por palavras-chave
+/*───────────────────────────────────────────────────────────
+  6. CLASSIFICAÇÃO
+───────────────────────────────────────────────────────────*/
 function classificarMensagem(texto) {
-  const textoLower = texto.toLowerCase();
+  const t = texto.toLowerCase();
 
-  // Caso especial: segunda via de nota fiscal → Financeiro
-  if (textoLower.includes("segunda via") && textoLower.includes("nota fiscal")) {
-    return { categoria: "financeiro", score: Infinity, confianca: "alta" };
-  }
+  // Caso especial: segunda via de nota fiscal
+  if (t.includes('segunda via') && t.includes('nota fiscal'))
+    return { categoria: 'financeiro', score: Infinity, confianca: 'alta' };
 
-  // ... resto do cálculo de score abaixo
   const scores = {};
-  
-  // Calcular score para cada categoria
-  for (const [key, categoria] of Object.entries(categorias)) {
-    let score = 0;
-    for (const palavra of categoria.palavrasChave) {
-      if (textoLower.includes(palavra.toLowerCase())) {
-        score += categoria.prioridade;
-      }
-    }
-    if (score > 0) {
-      scores[key] = score;
-    }
+  for (const [key, cat] of Object.entries(categorias)) {
+    let sc = 0;
+    cat.palavrasChave.forEach(p =>
+      t.includes(p.toLowerCase()) && (sc += cat.prioridade)
+    );
+    if (sc > 0) scores[key] = sc;
   }
-  
-  // Encontrar categoria com maior score
-  if (Object.keys(scores).length === 0) {
-    return null;
-  }
-  
-  const melhorCategoria = Object.keys(scores).reduce((a, b) => 
+  if (!Object.keys(scores).length) return null;
+  const melhor = Object.keys(scores).reduce((a, b) =>
     scores[a] > scores[b] ? a : b
   );
-  
-  return {
-    categoria: melhorCategoria,
-    score: scores[melhorCategoria],
-    confianca: scores[melhorCategoria] >= 3 ? 'alta' : 'baixa'
-  };
+  return { categoria: melhor, score: scores[melhor], confianca: scores[melhor] >= 3 ? 'alta' : 'baixa' };
 }
 
-// Função para registrar chamado na planilha
-async function registrarChamado(protocolo, solicitante, solicitacao, categoria = 'Aguardando Classificação') {
+/*───────────────────────────────────────────────────────────
+  7. PLANILHA
+───────────────────────────────────────────────────────────*/
+async function registrarChamado(proto, solicitante, solicitacao, categoria='Aguardando Classificação') {
   try {
-    const valores = [
-      [
-        protocolo,
-        formatarDataHora(),
-        solicitante,
-        categoria,
-        solicitacao,
-        '',
-        'Aberto',
-        ''
-      ]
-    ];
-
     await sheets.spreadsheets.values.append({
       spreadsheetId: process.env.SHEET_ID,
       range: `${process.env.SHEET_NAME}!A:H`,
       valueInputOption: 'USER_ENTERED',
       resource: {
-        values: valores
+        values: [[
+          proto, dataHoraBR(), solicitante, categoria,
+          solicitacao, '', 'Aberto', ''
+        ]]
       }
     });
-
-    console.log(`Chamado registrado: ${protocolo}`);
     return true;
-  } catch (error) {
-    console.error('Erro ao registrar chamado:', error);
+  } catch (err) {
+    console.error('Sheets append error:', err);
     return false;
   }
 }
-
-// Função para atualizar categoria na planilha
-async function atualizarCategoria(protocolo, categoria) {
+async function atualizarCategoria(proto, categoriaNome) {
   try {
-    // Buscar linha do protocolo
-    const response = await sheets.spreadsheets.values.get({
+    const res = await sheets.spreadsheets.values.get({
       spreadsheetId: process.env.SHEET_ID,
       range: `${process.env.SHEET_NAME}!A:H`
     });
-    
-    const rows = response.data.values;
-    if (!rows) return false;
-    
-    // Encontrar linha do protocolo
-    for (let i = 1; i < rows.length; i++) {
-      if (rows[i][0] === protocolo) {
-        // Atualizar categoria na coluna D (índice 3)
+    const rows = res.data.values || [];
+    for (let i=1;i<rows.length;i++) {
+      if (rows[i][0] === proto) {
         await sheets.spreadsheets.values.update({
           spreadsheetId: process.env.SHEET_ID,
-          range: `${process.env.SHEET_NAME}!D${i + 1}`,
+          range: `${process.env.SHEET_NAME}!D${i+1}`,
           valueInputOption: 'USER_ENTERED',
-          resource: {
-            values: [[categoria]]
-          }
+          resource: { values:[[categoriaNome]] }
         });
         return true;
       }
     }
     return false;
-  } catch (error) {
-    console.error('Erro ao atualizar categoria:', error);
+  } catch (err) {
+    console.error('Sheets update error:', err);
     return false;
   }
 }
 
-// Manipulador de mensagens de texto
-bot.on('text', async (msg) => {
-  const chatId = msg.chat.id;
-  const texto = msg.text;
-  const solicitante = obterNomeSolicitante(msg);
+/*───────────────────────────────────────────────────────────
+  8. EMAIL
+───────────────────────────────────────────────────────────*/
+async function enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacao) {
+  const cat = categorias[categoriaKey];
+  if (!cat) return false;
+  const mail = {
+    from: `"CAR KX3" <${process.env.SMTP_USER}>`,
+    to: cat.emails.join(', '),
+    subject: `Novo chamado – Protocolo ${proto} – ${cat.nome}`,
+    text: `
+Olá equipe ${cat.nome},
 
-  // Verificar se é resposta a classificação
+Um novo chamado foi aberto.
+
+Protocolo : ${proto}
+Solicitante: ${solicitante}
+Categoria  : ${cat.nome}
+Solicitação: ${solicitacao}
+
+Por favor, verifiquem e deem seguimento.
+
+CAR – Central de Atendimento ao Representante
+`
+  };
+  try {
+    await transporter.sendMail(mail);
+    console.log(`Email enviado ao setor ${cat.nome}`);
+    return true;
+  } catch (err) {
+    console.error('Erro envio email:', err);
+    return false;
+  }
+}
+
+/*───────────────────────────────────────────────────────────
+  9. TELEGRAM – RECEBENDO MENSAGEM
+───────────────────────────────────────────────────────────*/
+bot.on('text', async msg => {
+  const chatId = msg.chat.id;
+  const txt = msg.text;
+  const solicitante = nomeSolicitante(msg);
+
+  // Se aguardando resposta de classificação
   if (chamadosPendentes.has(chatId)) {
-    await processarRespostaClassificacao(chatId, texto);
+    // ignorar texto livre, aguardamos botões
     return;
   }
 
-  try {
-    // Gerar protocolo único
-    const protocolo = gerarProtocolo();
-    
-    // Classificar mensagem
-    const classificacao = classificarMensagem(texto);
-    
-    // Confirmar recebimento
-    await bot.sendMessage(chatId, `🎫 *Protocolo: ${protocolo}*\n\nOlá ${solicitante}!\n\nRecebi sua solicitação:\n📝 "${texto}"\n\n⏳ Analisando e direcionando para o setor responsável...`, {
-      parse_mode: 'Markdown'
-    });
+  const proto = gerarProtocolo();
 
-    if (classificacao && classificacao.confianca === 'alta') {
-      // Classificação automática com alta confiança
-      const categoria = categorias[classificacao.categoria];
-      await registrarChamado(protocolo, solicitante, texto, categoria.nome);
-      
-      await bot.sendMessage(chatId, `✅ *Chamado classificado automaticamente*\n\n📋 Protocolo: *${protocolo}*\n🏢 Setor: *${categoria.nome}*\n📅 Data: ${formatarDataHora()}\n\n📧 E-mail enviado para a equipe responsável.\n\n📱 Mantenha este protocolo para acompanhar seu chamado.`, {
-        parse_mode: 'Markdown'
-      });
-      
-    } else if (classificacao && classificacao.confianca === 'baixa') {
-      // Pedir confirmação ao usuário
-      const categoria = categorias[classificacao.categoria];
-      
-      await registrarChamado(protocolo, solicitante, texto);
-      
-      chamadosPendentes.set(chatId, {
-        protocolo: protocolo,
-        categoriaSugerida: classificacao.categoria
-      });
-      
-      const keyboard = {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '✅ Sim, está correto', callback_data: `confirm_${protocolo}` }],
-            [{ text: '❌ Não, escolher outro setor', callback_data: `reject_${protocolo}` }]
-          ]
-        }
-      };
-      
-      await bot.sendMessage(chatId, `🤖 *Identifiquei que sua solicitação é sobre:*\n\n🏢 *${categoria.nome}*\n\nEsta classificação está correta?`, {
-        parse_mode: 'Markdown',
-        ...keyboard
-      });
-      
-    } else {
-      // Não identificou categoria - mostrar menu
-      await registrarChamado(protocolo, solicitante, texto);
-      await mostrarMenuCategorias(chatId, protocolo);
-    }
+  await bot.sendMessage(chatId,
+`🎫 *Protocolo:* ${proto}
 
-  } catch (error) {
-    console.error('Erro no processamento da mensagem:', error);
-    await bot.sendMessage(chatId, `❌ Ops! Ocorreu um erro inesperado. Tente novamente em alguns minutos.`);
+Olá ${solicitante}!
+
+Recebi sua solicitação:
+"${txt}"
+
+⏳ Analisando setor responsável...`, { parse_mode:'Markdown' });
+
+  const cls = classificarMensagem(txt);
+
+  if (cls && cls.confianca === 'alta') {
+    const cat = categorias[cls.categoria];
+    await registrarChamado(proto, solicitante, txt, cat.nome);
+    await enviarEmailAbertura(proto, solicitante, cls.categoria, txt);
+
+    await bot.sendMessage(chatId,
+`✅ *Chamado classificado automaticamente*
+📋 Protocolo: *${proto}
+🏢 Setor: ${cat.nome}*
+
+📧 E-mail enviado à equipe responsável.`,
+{ parse_mode:'Markdown' });
+  } else if (cls) { // baixa confiança
+    await registrarChamado(proto, solicitante, txt);
+
+    chamadosPendentes.set(chatId, { protocolo: proto, categoriaSugerida: cls.categoria });
+
+    const cat = categorias[cls.categoria];
+    await bot.sendMessage(chatId,
+`🤖 Identifiquei que o assunto pode ser *${cat.nome}*.
+Esta classificação está correta?`,
+{
+  parse_mode:'Markdown',
+  reply_markup:{
+    inline_keyboard:[
+      [{text:'✅ Sim',callback_data:`confirm_${proto}`}],
+      [{text:'❌ Não',callback_data:`reject_${proto}`}]
+    ]
+  }
+});
+  } else {
+    await registrarChamado(proto, solicitante, txt);
+    mostrarMenuCategorias(chatId, proto);
   }
 });
 
-// Função para mostrar menu de categorias
-async function mostrarMenuCategorias(chatId, protocolo) {
-  chamadosPendentes.set(chatId, { protocolo: protocolo });
-  
-  const keyboard = {
-    reply_markup: {
-      inline_keyboard: [
-        [{ text: '📦 Estoque/Logística', callback_data: `cat_estoque_logistica_${protocolo}` }],
-        [{ text: '💰 Financeiro', callback_data: `cat_financeiro_${protocolo}` }],
-        [{ text: '🤝 Comercial', callback_data: `cat_comercial_${protocolo}` }],
-        [{ text: '📢 Marketing', callback_data: `cat_marketing_${protocolo}` }],
-        [{ text: '👔 Diretoria', callback_data: `cat_diretoria_${protocolo}` }],
-        [{ text: '🔧 Engenharia/Desenvolvimento', callback_data: `cat_engenharia_${protocolo}` }],
-        [{ text: '📊 Faturamento', callback_data: `cat_faturamento_${protocolo}` }],
-        [{ text: '🛡️ Garantia', callback_data: `cat_garantia_${protocolo}` }]
-      ]
-    }
-  };
-  
-  await bot.sendMessage(chatId, `🤖 *Não consegui identificar automaticamente o tipo da sua solicitação.*\n\nPor favor, selecione o setor mais adequado:`, {
-    parse_mode: 'Markdown',
-    ...keyboard
-  });
-}
+/*───────────────────────────────────────────────────────────
+  10. TELEGRAM – CALLBACK (BOTÕES)
+───────────────────────────────────────────────────────────*/
+bot.on('callback_query', async q => {
+  const chatId = q.message.chat.id;
+  const data = q.data;
 
-// Manipulador de callback queries (botões)
-bot.on('callback_query', async (query) => {
-  const chatId = query.message.chat.id;
-  const data = query.data;
-  
   if (data.startsWith('confirm_')) {
-    const protocolo = data.replace('confirm_', '');
-    const pendente = chamadosPendentes.get(chatId);
-    
-    if (pendente && pendente.categoriaSugerida) {
-      const categoria = categorias[pendente.categoriaSugerida];
-      await atualizarCategoria(protocolo, categoria.nome);
-      
-      await bot.editMessageText(`✅ *Classificação confirmada!*\n\n📋 Protocolo: *${protocolo}*\n🏢 Setor: *${categoria.nome}*\n📧 E-mail enviado para a equipe responsável.`, {
-        chat_id: chatId,
-        message_id: query.message.message_id,
-        parse_mode: 'Markdown'
-      });
-      
+    const proto = data.replace('confirm_','');
+    const pend = chamadosPendentes.get(chatId);
+    if (pend?.categoriaSugerida) {
+      const catKey = pend.categoriaSugerida;
+      const cat = categorias[catKey];
+      await atualizarCategoria(proto, cat.nome);
+      await enviarEmailAbertura(proto, nomeSolicitante(q.message), catKey, '—');
+      await bot.editMessageText(
+`✅ Classificação confirmada!
+
+Protocolo: *${proto}
+Setor: ${cat.nome}*
+
+📧 E-mail enviado à equipe responsável.`,
+{ chat_id:chatId, message_id:q.message.message_id, parse_mode:'Markdown' });
       chamadosPendentes.delete(chatId);
     }
   } else if (data.startsWith('reject_')) {
-    const protocolo = data.replace('reject_', '');
-    await bot.editMessageText('🤖 *Escolha o setor correto:*', {
-      chat_id: chatId,
-      message_id: query.message.message_id,
-      parse_mode: 'Markdown'
-    });
-    await mostrarMenuCategorias(chatId, protocolo);
+    const proto = data.replace('reject_','');
+    await bot.editMessageText('Por favor, escolha o setor correto:',
+      { chat_id:chatId, message_id:q.message.message_id });
+    mostrarMenuCategorias(chatId, proto);
   } else if (data.startsWith('cat_')) {
     const parts = data.split('_');
-    const protocolo = parts[parts.length - 1];
-    const categoriaKey = parts.slice(1, -1).join('_');
-    
-    const categoria = categorias[categoriaKey];
-    if (categoria) {
-      await atualizarCategoria(protocolo, categoria.nome);
-      
-      await bot.editMessageText(`✅ *Chamado classificado!*\n\n📋 Protocolo: *${protocolo}*\n🏢 Setor: *${categoria.nome}*\n📧 E-mail enviado para a equipe responsável.`, {
-        chat_id: chatId,
-        message_id: query.message.message_id,
-        parse_mode: 'Markdown'
-      });
-      
-      chamadosPendentes.delete(chatId);
-    }
+    const proto = parts.pop();
+    const catKey = parts.slice(1).join('_');
+    const cat = categorias[catKey];
+    await atualizarCategoria(proto, cat.nome);
+    await enviarEmailAbertura(proto, nomeSolicitante(q.message), catKey, '—');
+    await bot.editMessageText(
+`✅ Chamado classificado!
+
+Protocolo: *${proto}
+Setor: ${cat.nome}*
+
+📧 E-mail enviado à equipe responsável.`,
+{ chat_id:chatId, message_id:q.message.message_id, parse_mode:'Markdown' });
+    chamadosPendentes.delete(chatId);
   }
-  
-  await bot.answerCallbackQuery(query.id);
+
+  bot.answerCallbackQuery(q.id);
 });
 
-console.log('🤖 Bot CAR KX3 iniciado com sistema de classificação... Aguardando mensagens...');
+/*───────────────────────────────────────────────────────────
+  11. MENU DE CATEGORIAS MANUAL
+───────────────────────────────────────────────────────────*/
+function mostrarMenuCategorias(chatId, proto) {
+  chamadosPendentes.set(chatId, { protocolo: proto });
+  bot.sendMessage(chatId,'Selecione o setor:',{
+    reply_markup:{
+      inline_keyboard:[
+        [{text:'📦 Estoque/Logística', callback_data:`cat_estoque_logistica_${proto}`}],
+        [{text:'💰 Financeiro',         callback_data:`cat_financeiro_${proto}`}],
+        [{text:'🤝 Comercial',          callback_data:`cat_comercial_${proto}`}],
+        [{text:'📢 Marketing',          callback_data:`cat_marketing_${proto}`}],
+        [{text:'👔 Diretoria',          callback_data:`cat_diretoria_${proto}`}],
+        [{text:'🔧 Engenharia',         callback_data:`cat_engenharia_${proto}`}],
+        [{text:'📊 Faturamento',        callback_data:`cat_faturamento_${proto}`}],
+        [{text:'🛡️ Garantia',          callback_data:`cat_garantia_${proto}`}]
+      ]
+    }
+  });
+}
+
+console.log('🤖 Bot CAR KX3 rodando...');
