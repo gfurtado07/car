@@ -24,9 +24,9 @@ const speechClient = new SpeechClient({
   credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS)
 });
 
-/* ═══════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    1. CONFIGURAÇÕES INICIAIS
-═══════════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 
 // PostgreSQL Database
 const dbClient = new Client({
@@ -39,7 +39,7 @@ async function inicializarBancoDados() {
   try {
     await dbClient.connect();
     console.log('✅ Conectado ao banco de dados PostgreSQL');
-    
+
     // Cria a tabela de usuários se não existir
     await dbClient.query(`
       CREATE TABLE IF NOT EXISTS usuarios (
@@ -50,7 +50,7 @@ async function inicializarBancoDados() {
         data_atualizacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    
+
     console.log('✅ Tabela de usuários verificada/criada');
   } catch (err) {
     console.error('❌ Erro ao conectar com o banco de dados:', err);
@@ -95,10 +95,11 @@ const transporter = nodemailer.createTransport({
 const PARETO_API_URL = 'https://tess.pareto.io/api';
 const PARETO_TOKEN = process.env.PARETO_API_TOKEN;
 const PARETO_AGENT_ID = process.env.PARETO_AGENT_ID;
+const PARETO_REVIEW_AGENT_ID = process.env.PARETO_REVIEW_AGENT_ID;
 
-/* ═══════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    2. CATEGORIAS DOS SETORES - TEMPORÁRIO PARA TESTES
-═══════════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 
 const categorias = {
   estoque_logistica: {
@@ -135,15 +136,16 @@ const categorias = {
   }
 };
 
-/* ═══════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    3. ESTADO, HELPERS, E TRANSCRIÇÃO DE ÁUDIO
-═══════════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 
 const conversasEmAndamento = new Map();
 const anexosDoUsuario = new Map();
 const protocolosRegistrados = new Map(); // Armazena o protocolo associado a cada chat
 const aguardandoEmail = new Map(); // Para controle de fluxo de cadastro de e-mail
 const departamentosSelecionados = new Map(); // Para armazenar departamento selecionado temporariamente
+const aguardandoRevisao = new Map(); // Para controle do fluxo de revisão de chamados
 
 function gerarProtocolo() {
   const d = new Date();
@@ -173,9 +175,9 @@ function validarEmail(email) {
   return re.test(email);
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    3.1 FUNÇÕES DO BANCO DE DADOS
-══════════════════════════════════════════════════════════════ */
+══════════════════════════════════════════════════════════════════════ */
 
 async function buscarUsuario(telegramId) {
   try {
@@ -220,9 +222,9 @@ async function atualizarEmailUsuario(telegramId, email) {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    3.2 TRANSCRIÇÃO DE ÁUDIO (GOOGLE CLOUD SPEECH) - CORRIGIDA
-══════════════════════════════════════════════════════════════ */
+══════════════════════════════════════════════════════════════════════ */
 
 async function transcreverComGoogle(wavFilePath) {
   try {
@@ -248,30 +250,30 @@ async function transcreverComGoogle(wavFilePath) {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    3.3 PROCESSAMENTO DE ANEXOS DE E-MAIL
-══════════════════════════════════════════════════════════════ */
+══════════════════════════════════════════════════════════════════════ */
 
 async function processarAnexosEmail(attachments, chatId) {
   const anexosProcessados = [];
-  
+
   if (!attachments || attachments.length === 0) {
     return anexosProcessados;
   }
-  
+
   for (const attachment of attachments) {
     try {
       const filename = attachment.filename || `anexo_${Date.now()}`;
       const filepath = `/tmp/${filename}`;
-      
+
       // Salva o anexo temporariamente
       fs.writeFileSync(filepath, attachment.content);
-      
+
       // Detecta o tipo do arquivo e envia apropriadamente
       const mimeType = attachment.contentType || '';
       const isImage = mimeType.startsWith('image/');
       const isDocument = !isImage;
-      
+
       if (isImage) {
         // Envia como foto
         await bot.sendPhoto(chatId, filepath, {
@@ -283,24 +285,24 @@ async function processarAnexosEmail(attachments, chatId) {
           caption: `📎 Anexo: ${filename}`
         });
       }
-      
+
       console.log(`📎 Anexo enviado para o usuário: ${filename}`);
       anexosProcessados.push(filename);
-      
+
       // Remove o arquivo temporário
       fs.unlinkSync(filepath);
-      
+
     } catch (error) {
       console.error('Erro ao processar anexo:', error);
     }
   }
-  
+
   return anexosProcessados;
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    4. COMUNICAÇÃO COM AGENTE IA (PARETO) – CORRIGIDA
-═══════════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 
 function tentarParsearJSON(texto) {
   try {
@@ -375,9 +377,55 @@ async function consultarAgenteIA(mensagemUsuario, contextoConversa = []) {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
+   4.1 NOVA FUNÇÃO PARA CONSULTAR AGENTE REVISOR
+═══════════════════════════════════════════════════════════════════════ */
+
+async function consultarAgenteRevisor(dadosChamado) {
+  try {
+    const prompt = `Departamento selecionado: ${dadosChamado.departamento}
+Descrição: ${dadosChamado.descricao}
+Anexos disponíveis: ${dadosChamado.anexos || 'Nenhum'}
+Informações extras: ${JSON.stringify(dadosChamado.extras || {})}`;
+
+    console.log('Enviando para agente revisor:', prompt);
+
+    const response = await axios.post(
+      `${PARETO_API_URL}/agents/${PARETO_REVIEW_AGENT_ID}/execute`,
+      {
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3,
+        model: "tess-5",
+        tools: "no-tools",
+        wait_execution: true
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${PARETO_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+
+    if (response.data && response.data.responses && response.data.responses[0]) {
+      const output = response.data.responses[0].output;
+      console.log('Resposta bruta do agente revisor:', output);
+      const jsonResponse = tentarParsearJSON(output);
+      if (jsonResponse && jsonResponse.acao === 'revisar_chamado') {
+        console.log('JSON do revisor parsado com sucesso:', jsonResponse);
+        return jsonResponse;
+      }
+    }
+    throw new Error('Resposta inválida do agente revisor');
+  } catch (error) {
+    console.error('Erro ao consultar agente revisor:', error.message);
+    return null;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
    5. PLANILHA E E-MAIL (FUNCIONALIDADE ATUAL)
-═══════════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 
 // --- Função auxiliar para carregar e-mails de um departamento na planilha ---
 async function buscarEmailsDepartamento(nomeDepartamento) {
@@ -427,7 +475,7 @@ async function solicitarDepartamento(chatId) {
   // Cria botões inline para cada departamento
   const inlineKeyboard = departamentos.map(dept => [{ text: dept, callback_data: `selecionar_depto_${dept}` }]);
 
-  await bot.sendMessage(chatId, '📋 Por favor, selecione o departamento para qual deseja abrir o chamado:', {
+  await bot.sendMessage(chatId, '🏢 Por favor, selecione o departamento para qual deseja abrir o chamado:', {
     reply_markup: {
       inline_keyboard: inlineKeyboard
     }
@@ -482,7 +530,7 @@ async function atualizarStatusChamado(proto, novoStatus = "Finalizado") {
 
     console.log(`Status do protocolo ${proto} atualizado para "${novoStatus}"`);
     return true;
-    
+
   } catch (err) {
     console.error('Erro ao atualizar status na planilha:', err);
     return false;
@@ -512,7 +560,10 @@ async function atualizarRespostaChamado(proto, resposta) {
     // Pega a resposta atual para concatenar com a nova
     const respostaAtual = linhas[linhaIndex][colunaResposta] || '';
     const novaResposta = respostaAtual ? 
-      `${respostaAtual}\n\n--- ${dataHoraBR()} ---\n${resposta}` : 
+      `${respostaAtual}
+
+--- ${dataHoraBR()} ---
+${resposta}` : 
       `${dataHoraBR()}: ${resposta}`;
 
     // Atualiza a célula da resposta
@@ -527,7 +578,7 @@ async function atualizarRespostaChamado(proto, resposta) {
 
     console.log(`Resposta do protocolo ${proto} atualizada na planilha`);
     return true;
-    
+
   } catch (err) {
     console.error('Erro ao atualizar resposta na planilha:', err);
     return false;
@@ -554,11 +605,11 @@ async function baixarArquivoTelegram(fileId, nomeOriginal) {
 async function enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacao, anexos = [], informacoesColetadas = {}, emailSolicitante = null) {
   const cat = categorias[categoriaKey];
   if (!cat) return false;
-  
+
   // carrega e-mails dinâmicos
   const deptEmails = await buscarEmailsDepartamento(cat.nome);
   const toEmails = deptEmails.length ? deptEmails : cat.emails;
-  
+
   let infoExtra = '';
   if (informacoesColetadas && Object.keys(informacoesColetadas).length > 0) {
     infoExtra = '\n\nInformações coletadas:\n';
@@ -568,12 +619,12 @@ async function enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacao
     if (informacoesColetadas.urgencia) infoExtra += `- Urgência: ${informacoesColetadas.urgencia}\n`;
     if (informacoesColetadas.detalhes_extras) infoExtra += `- Detalhes: ${informacoesColetadas.detalhes_extras}\n`;
   }
-  
+
   let anexoInfo = '';
   if (anexos.length > 0) {
     anexoInfo = `\n\nAnexos enviados: ${anexos.length} arquivo(s)`;
   }
-  
+
   const mail = {
     from: `"CAR KX3" <${process.env.SMTP_USER}>`,
     to: toEmails.join(', '),
@@ -595,7 +646,7 @@ CAR – Central de Atendimento ao Representante
 KX3 Galtecom`,
     attachments: anexos.map(c => ({ filename: path.basename(c), path: c }))
   };
-  
+
   try {
     await transporter.sendMail(mail);
     anexos.forEach(c => fs.unlink(c, err => { if (err) console.error('Erro ao deletar arquivo:', err); }));
@@ -607,9 +658,9 @@ KX3 Galtecom`,
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════
-   6. PROCESSAMENTO PRINCIPAL COM SELEÇÃO DE DEPARTAMENTO
-═══════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════════════
+   6. PROCESSAMENTO PRINCIPAL COM SELEÇÃO DE DEPARTAMENTO E REVISÃO
+═══════════════════════════════════════════════════════════════════════ */
 
 async function processarMensagem(chatId, texto, solicitante, telegramId) {
   // Comando para atualizar e-mail
@@ -618,63 +669,124 @@ async function processarMensagem(chatId, texto, solicitante, telegramId) {
     await bot.sendMessage(chatId, '📧 Por favor, digite seu novo endereço de e-mail:');
     return;
   }
-  
+
   // Verifica estados de controle de fluxo
   if (aguardandoEmail.has(chatId)) {
     const estado = aguardandoEmail.get(chatId);
-    
+
     // Estado: aguardando seleção de departamento (só aceita callback)
     if (estado.acao === 'aguardando_departamento') {
       await bot.sendMessage(chatId, 'Por favor, selecione o departamento utilizando os botões acima.');
       return;
     }
-    
+
     // Estado: aguardando descrição após seleção de departamento
     if (estado.acao === 'aguardando_descricao') {
       aguardandoEmail.delete(chatId);
       const deptSelecionado = departamentosSelecionados.get(chatId);
-      departamentosSelecionados.delete(chatId);
 
       if (!deptSelecionado) {
         await bot.sendMessage(chatId, '❌ Departamento não selecionado. Por favor, reinicie o processo digitando "abrir chamado".');
         return;
       }
 
-      const proto = gerarProtocolo();
-      protocolosRegistrados.set(chatId, proto);
-      
-      // Procura a chave da categoria que corresponda exatamente ao departamento selecionado
-      const categoryKey = Object.keys(categorias).find(key => categorias[key].nome === deptSelecionado);
+      // Armazena dados para revisão
+      const dadosChamado = {
+        departamento: deptSelecionado,
+        descricao: texto,
+        anexos: anexosDoUsuario.has(chatId) ? anexosDoUsuario.get(chatId).map(a => path.basename(a)).join(', ') : 'Nenhum',
+        extras: {}
+      };
 
-      if (!categoryKey) {
-        await bot.sendMessage(chatId, '❌ Departamento selecionado não é suportado no sistema. Contate o suporte.');
-        return;
+      aguardandoRevisao.set(chatId, dadosChamado);
+
+      // Consulta agente revisor
+      const revisao = await consultarAgenteRevisor(dadosChamado);
+      
+      if (revisao && revisao.resumo_formatado) {
+        await bot.sendMessage(chatId, 
+          `📋 *RESUMO DO CHAMADO*\n\n${revisao.resumo_formatado}`,
+          { parse_mode: 'Markdown' }
+        );
+
+        if (revisao.sugestoes && revisao.sugestoes.length > 0) {
+          await bot.sendMessage(chatId, 
+            `💡 *Sugestões para melhorar seu chamado:*\n${revisao.sugestoes.map(s => `• ${s}`).join('\n')}`,
+            { parse_mode: 'Markdown' }
+          );
+        }
+
+        await bot.sendMessage(chatId, 
+          '📎 *Deseja adicionar mais informações ou anexos antes de abrir o chamado?*\n\n' +
+          'Você pode:\n' +
+          '• Enviar fotos, documentos, áudios ou vídeos\n' +
+          '• Adicionar mais detalhes por texto\n' +
+          '• Ou confirmar a abertura do chamado',
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '✅ Abrir Chamado Agora', callback_data: 'confirmar_abertura' }],
+                [{ text: '📝 Adicionar Mais Informações', callback_data: 'adicionar_info' }]
+              ]
+            }
+          }
+        );
+      } else {
+        // Fallback se agente revisor falhar
+        await bot.sendMessage(chatId, 
+          `📋 *RESUMO DO CHAMADO*\n\n` +
+          `🏢 **Departamento:** ${deptSelecionado}\n` +
+          `📝 **Descrição:** ${texto}\n` +
+          `📎 **Anexos:** ${dadosChamado.anexos}`,
+          {
+            parse_mode: 'Markdown',
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '✅ Abrir Chamado Agora', callback_data: 'confirmar_abertura' }],
+                [{ text: '📝 Adicionar Mais Informações', callback_data: 'adicionar_info' }]
+              ]
+            }
+          }
+        );
       }
-      
-      const usuario = await buscarUsuario(telegramId);
-      
-      await registrarChamado(proto, solicitante, texto, categorias[categoryKey].nome);
-      await enviarEmailAbertura(proto, solicitante, categoryKey, texto, anexosDoUsuario.get(chatId) || [], {}, usuario?.email);
-      
-      await bot.sendMessage(chatId, 
-        `✅ *Chamado criado com sucesso!*\n\n📋 Protocolo: *${proto}*\n🏢 Setor: *${categorias[categoryKey].nome}*\n📧 E-mail enviado à equipe responsável.\n\n📱 Guarde este número de protocolo para acompanhar seu chamado.`,
-        { parse_mode: 'Markdown' }
-      );
-      
-      anexosDoUsuario.delete(chatId);
       return;
     }
-    
+
+    // Estado: aguardando informações adicionais
+    if (estado.acao === 'aguardando_info_adicional') {
+      const dadosAtuais = aguardandoRevisao.get(chatId);
+      if (dadosAtuais) {
+        // Adiciona informação extra
+        dadosAtuais.descricao += `\n\nInformação adicional: ${texto}`;
+        aguardandoRevisao.set(chatId, dadosAtuais);
+        
+        await bot.sendMessage(chatId, 
+          '✅ Informação adicional registrada!\n\n' +
+          'Deseja adicionar mais alguma coisa ou confirmar a abertura do chamado?',
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '✅ Abrir Chamado Agora', callback_data: 'confirmar_abertura' }],
+                [{ text: '📝 Adicionar Mais Informações', callback_data: 'adicionar_info' }]
+              ]
+            }
+          }
+        );
+      }
+      return;
+    }
+
     // Estados de cadastro/atualização de e-mail
     if (estado.acao === 'cadastro' || estado.acao === 'update') {
       aguardandoEmail.delete(chatId);
-      
+
       if (!validarEmail(texto)) {
         await bot.sendMessage(chatId, '❌ E-mail inválido. Por favor, digite um e-mail válido (ex: seuemail@exemplo.com):');
         aguardandoEmail.set(chatId, estado); // Recoloca na fila
         return;
       }
-      
+
       if (estado.acao === 'cadastro') {
         // Primeiro cadastro
         await salvarUsuario(telegramId, solicitante, texto);
@@ -691,26 +803,26 @@ async function processarMensagem(chatId, texto, solicitante, telegramId) {
       return;
     }
   }
-  
+
   // Se o usuário pergunta pelo protocolo
   if (/qual\s+n(ú|u)mero do protocolo/i.test(texto)) {
     if (protocolosRegistrados.has(chatId)) {
       const proto = protocolosRegistrados.get(chatId);
-      await bot.sendMessage(chatId, `📋 O número do seu protocolo é: ${proto}`);
+      await bot.sendMessage(chatId, `🔢 O número do seu protocolo é: ${proto}`);
       return;
     } else {
       await bot.sendMessage(chatId, `❌ Nenhum protocolo foi gerado para sua solicitação ainda.`);
       return;
     }
   }
-  
+
   // Verifica se usuário tem e-mail cadastrado
   let usuario = await buscarUsuario(telegramId);
   if (!usuario) {
     // Primeiro acesso - cadastra o usuário
     usuario = await salvarUsuario(telegramId, solicitante);
   }
-  
+
   // Se não tem e-mail cadastrado, solicita apenas na primeira abertura de chamado
   if (!usuario.email && /abrir\s+(um\s+)?(car|chamado)/i.test(texto)) {
     aguardandoEmail.set(chatId, { acao: 'cadastro' });
@@ -719,7 +831,7 @@ async function processarMensagem(chatId, texto, solicitante, telegramId) {
     );
     return;
   }
-  
+
   // Se o usuário solicita explicitamente abrir um CAR/chamado
   if (/abrir\s+(um\s+)?(car|chamado)/i.test(texto)) {
     // Solicita seleção do departamento ao invés de abrir direto
@@ -727,14 +839,14 @@ async function processarMensagem(chatId, texto, solicitante, telegramId) {
     aguardandoEmail.set(chatId, { acao: 'aguardando_departamento' });
     return;
   }
-  
+
   // Para outras mensagens, resposta padrão ou integração com IA (se necessário)
   await bot.sendMessage(chatId, '👋 Olá! Para abrir um chamado, digite "abrir chamado" ou "abrir CAR".\n\nPara consultar seu protocolo, digite "qual número do protocolo".\n\nPara atualizar seu e-mail, digite "/email".');
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    7. HANDLERS TELEGRAM
-═══════════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 
 // Mensagens de texto
 bot.on('text', async msg => {
@@ -757,12 +869,17 @@ bot.on('photo', async msg => {
   const sizes = msg.photo;
   const arq = sizes[sizes.length - 1];
   const nome = `foto_${arq.file_unique_id}.jpg`;
-  
+
   try {
     const caminho = await baixarArquivoTelegram(arq.file_id, nome);
     if (!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId, []);
     anexosDoUsuario.get(chatId).push(caminho);
-    await bot.sendMessage(chatId, `📸 Foto recebida! Digite "abrir chamado" para criar um chamado com este anexo.`);
+    
+    if (aguardandoRevisao.has(chatId)) {
+      await bot.sendMessage(chatId, `📸 Foto recebida e adicionada ao chamado!`);
+    } else {
+      await bot.sendMessage(chatId, `📸 Foto recebida! Digite "abrir chamado" para criar um chamado com este anexo.`);
+    }
   } catch (error) {
     console.error('Erro ao processar foto:', error);
     await bot.sendMessage(chatId, '❌ Não consegui processar sua foto. Tente novamente.');
@@ -774,12 +891,17 @@ bot.on('document', async msg => {
   const chatId = msg.chat.id;
   const doc = msg.document;
   const nome = doc.file_name || `doc_${doc.file_unique_id}`;
-  
+
   try {
     const caminho = await baixarArquivoTelegram(doc.file_id, nome);
     if (!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId, []);
     anexosDoUsuario.get(chatId).push(caminho);
-    await bot.sendMessage(chatId, `📄 Documento recebido! Digite "abrir chamado" para criar um chamado com este anexo.`);
+    
+    if (aguardandoRevisao.has(chatId)) {
+      await bot.sendMessage(chatId, `📄 Documento recebido e adicionado ao chamado!`);
+    } else {
+      await bot.sendMessage(chatId, `📄 Documento recebido! Digite "abrir chamado" para criar um chamado com este anexo.`);
+    }
   } catch (error) {
     console.error('Erro ao processar documento:', error);
     await bot.sendMessage(chatId, '❌ Não consegui processar seu documento. Tente novamente.');
@@ -791,12 +913,17 @@ bot.on('audio', async msg => {
   const chatId = msg.chat.id;
   const aud = msg.audio;
   const nome = aud.file_name || `audio_${aud.file_unique_id}.mp3`;
-  
+
   try {
     const caminho = await baixarArquivoTelegram(aud.file_id, nome);
     if (!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId, []);
     anexosDoUsuario.get(chatId).push(caminho);
-    await bot.sendMessage(chatId, `🎵 Áudio recebido! Digite "abrir chamado" para criar um chamado com este anexo.`);
+    
+    if (aguardandoRevisao.has(chatId)) {
+      await bot.sendMessage(chatId, `🎵 Áudio recebido e adicionado ao chamado!`);
+    } else {
+      await bot.sendMessage(chatId, `🎵 Áudio recebido! Digite "abrir chamado" para criar um chamado com este anexo.`);
+    }
   } catch (error) {
     console.error('Erro ao processar áudio:', error);
     await bot.sendMessage(chatId, '❌ Não consegui processar seu áudio. Tente novamente.');
@@ -808,12 +935,17 @@ bot.on('video', async msg => {
   const chatId = msg.chat.id;
   const vid = msg.video;
   const nome = vid.file_name || `video_${vid.file_unique_id}.mp4`;
-  
+
   try {
     const caminho = await baixarArquivoTelegram(vid.file_id, nome);
     if (!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId, []);
     anexosDoUsuario.get(chatId).push(caminho);
-    await bot.sendMessage(chatId, `🎬 Vídeo recebido! Digite "abrir chamado" para criar um chamado com este anexo.`);
+    
+    if (aguardandoRevisao.has(chatId)) {
+      await bot.sendMessage(chatId, `🎬 Vídeo recebido e adicionado ao chamado!`);
+    } else {
+      await bot.sendMessage(chatId, `🎬 Vídeo recebido! Digite "abrir chamado" para criar um chamado com este anexo.`);
+    }
   } catch (error) {
     console.error('Erro ao processar vídeo:', error);
     await bot.sendMessage(chatId, '❌ Não consegui processar seu vídeo. Tente novamente.');
@@ -827,7 +959,7 @@ bot.on('voice', async msg => {
   const nome = `voice_${voice.file_unique_id}.ogg`;
   const telegramId = msg.from.id;
   const solicitante = nomeSolicitante(msg);
-  
+
   try {
     // 1) Baixa o OGG do Telegram
     const oggPath = await baixarArquivoTelegram(voice.file_id, nome);
@@ -860,19 +992,20 @@ bot.on('voice', async msg => {
     } else {
       await bot.sendMessage(chatId, '❌ Não consegui transcrever seu áudio. Tente falar mais claramente ou digite sua mensagem.');
     }
-    
+
   } catch (error) {
     console.error('Erro ao transcrever voz:', error);
     await bot.sendMessage(chatId, '❌ Não consegui transcrever sua mensagem de voz. Por favor, tente novamente ou digite sua mensagem.');
   }
 });
 
-// Callback para interações via inline keyboard
+// Callback para interações via inline keyboard - ATUALIZADO
 bot.on('callback_query', async q => {
   const chatId = q.message.chat.id;
   const data = q.data;
   const telegramId = q.from.id;
-  
+  const solicitante = nomeSolicitante(q);
+
   if (data.startsWith('finalizar_')) {
     const proto = data.replace('finalizar_', '');
     const sucesso = await atualizarStatusChamado(proto, "Finalizado");
@@ -889,10 +1022,10 @@ bot.on('callback_query', async q => {
     // O atendimento continua; o usuário poderá enviar novas mensagens que serão anexadas ao mesmo protocolo.
   } else if (data.startsWith('selecionar_depto_')) {
     const deptSelecionado = data.replace('selecionar_depto_', '');
-    
+
     // Guarda a seleção para usar ao abrir o chamado
     departamentosSelecionados.set(chatId, deptSelecionado);
-    
+
     await bot.editMessageText(
       `✅ Você selecionou o departamento: *${deptSelecionado}*.\n\n📝 Por favor, descreva sua solicitação detalhadamente:`,
       { 
@@ -902,17 +1035,79 @@ bot.on('callback_query', async q => {
         reply_markup: { inline_keyboard: [] } // Remove os botões
       }
     );
-    
+
     // Marca que o próximo texto será a descrição do chamado
     aguardandoEmail.set(chatId, { acao: 'aguardando_descricao' });
+  } else if (data === 'confirmar_abertura') {
+    // Confirma abertura do chamado
+    const dadosChamado = aguardandoRevisao.get(chatId);
+    const deptSelecionado = departamentosSelecionados.get(chatId);
+    
+    if (!dadosChamado || !deptSelecionado) {
+      await bot.sendMessage(chatId, '❌ Erro interno. Por favor, reinicie o processo digitando "abrir chamado".');
+      return;
+    }
+
+    const proto = gerarProtocolo();
+    protocolosRegistrados.set(chatId, proto);
+
+    // Procura a chave da categoria que corresponda exatamente ao departamento selecionado
+    const categoryKey = Object.keys(categorias).find(key => categorias[key].nome === deptSelecionado);
+
+    if (!categoryKey) {
+      await bot.sendMessage(chatId, '❌ Departamento selecionado não é suportado no sistema. Contate o suporte.');
+      return;
+    }
+
+    const usuario = await buscarUsuario(telegramId);
+
+    await registrarChamado(proto, solicitante, dadosChamado.descricao, categorias[categoryKey].nome);
+    await enviarEmailAbertura(proto, solicitante, categoryKey, dadosChamado.descricao, anexosDoUsuario.get(chatId) || [], {}, usuario?.email);
+
+    await bot.editMessageText(
+      `✅ *CHAMADO CRIADO COM SUCESSO!*\n\n` +
+      `🔢 Protocolo: *${proto}*\n` +
+      `🏢 Setor: *${categorias[categoryKey].nome}*\n` +
+      `📧 E-mail enviado à equipe responsável.\n\n` +
+      `📱 Guarde este número de protocolo para acompanhar seu chamado.`,
+      { 
+        chat_id: chatId, 
+        message_id: q.message.message_id, 
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: [] }
+      }
+    );
+
+    // Limpa dados temporários
+    anexosDoUsuario.delete(chatId);
+    aguardandoRevisao.delete(chatId);
+    departamentosSelecionados.delete(chatId);
+    
+  } else if (data === 'adicionar_info') {
+    // Solicita informações adicionais
+    aguardandoEmail.set(chatId, { acao: 'aguardando_info_adicional' });
+    
+    await bot.editMessageText(
+      '📝 *Adicionar mais informações*\n\n' +
+      'Você pode:\n' +
+      '• Enviar fotos, documentos, áudios ou vídeos\n' +
+      '• Digitar informações adicionais\n\n' +
+      'Digite a informação adicional ou envie seus anexos:',
+      { 
+        chat_id: chatId, 
+        message_id: q.message.message_id, 
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: [] }
+      }
+    );
   }
 
   await bot.answerCallbackQuery(q.id);
 });
 
-/* ═══════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    8. MONITOR DE EMAILS (ATUALIZAÇÕES DE CHAMADOS) - CORRIGIDO
-═══════════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 
 function startEmailMonitor() {
   const imapConfig = {
@@ -956,38 +1151,38 @@ function startEmailMonitor() {
                   const subject = mail.subject || '';
                   const body = mail.text || '';
                   const attachments = mail.attachments || [];
-                  
+
                   console.log('📨 Novo email recebido!');
                   console.log('Assunto:', subject);
                   console.log('Início do corpo:', body.substring(0, 200));
                   console.log('Anexos:', attachments.length);
-                  
+
                   // Busca protocolo no assunto com regex mais flexível
-                  let match = subject.match(/protocolo\s*[:\-––]?\s*(\d{8}-\d{4})/i);
+                  let match = subject.match(/protocolo\s*[:\-–—]?\s*(\d{8}-\d{4})/i);
                   let proto = null;
-                  
+
                   if (match) {
                     proto = match[1];
                     console.log('✅ Protocolo encontrado no assunto:', proto);
                   } else {
                     // Tenta buscar no corpo do email
-                    const matchBody = body.match(/protocolo\s*[:\-––]?\s*(\d{8}-\d{4})/i);
+                    const matchBody = body.match(/protocolo\s*[:\-–—]?\s*(\d{8}-\d{4})/i);
                     if (matchBody) {
                       proto = matchBody[1];
                       console.log('✅ Protocolo encontrado no corpo:', proto);
                     }
                   }
-                  
+
                   if (proto) {
                     // Atualiza a resposta na planilha
                     await atualizarRespostaChamado(proto, body);
-                    
+
                     // NOVA FUNCIONALIDADE: Atualiza status para "Em Andamento"
                     const mudou = await atualizarStatusChamado(proto, "Em Andamento");
                     if (!mudou) {
                       console.warn(`Não foi possível marcar protocolo ${proto} como "Em Andamento" na planilha.`);
                     }
-                    
+
                     let targetChat = null;
                     // Procura pelo chat que possui esse protocolo
                     for (const [chatId, protocol] of protocolosRegistrados.entries()) {
@@ -996,15 +1191,15 @@ function startEmailMonitor() {
                         break;
                       }
                     }
-                    
+
                     if (targetChat) {
                       console.log('🤖 Enviando atualização para chat:', targetChat);
-                      
+
                       // Envia a mensagem de resposta
-                      await bot.sendMessage(targetChat, `📧 *Atualização no chamado ${proto}:*\n\n${body.trim()}`, {
+                      await bot.sendMessage(targetChat, `🔧 *Atualização no chamado ${proto}:*\n\n${body.trim()}`, {
                         parse_mode: 'Markdown'
                       });
-                      
+
                       // Processa e envia anexos se existirem
                       if (attachments.length > 0) {
                         console.log(`📎 Processando ${attachments.length} anexo(s)...`);
@@ -1013,7 +1208,7 @@ function startEmailMonitor() {
                           await bot.sendMessage(targetChat, `📎 ${anexosEnviados.length} anexo(s) enviado(s) junto com a resposta.`);
                         }
                       }
-                      
+
                       // Envia os botões de ação
                       await bot.sendMessage(targetChat, `Deseja finalizar o CAR ou fazer mais alguma solicitação?`, {
                         reply_markup: {
@@ -1023,7 +1218,7 @@ function startEmailMonitor() {
                           ]
                         }
                       });
-                      
+
                     } else {
                       console.log(`⚠️ Protocolo ${proto} não associado a nenhum chat ativo.`);
                     }
@@ -1057,20 +1252,23 @@ function startEmailMonitor() {
   imap.connect();
 }
 
-/* ═══════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════
    9. INICIALIZAÇÃO
-═══════════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════ */
 
 async function iniciarBot() {
   await inicializarBancoDados();
   startEmailMonitor();
-  
+
   console.log('🤖 Bot CAR KX3 com IA iniciado!');
   console.log('🧠 Agente IA integrado com Pareto');
+  console.log('🔍 Agente Revisor de Chamados ativo');
   console.log('💾 Banco de dados PostgreSQL conectado');
   console.log('✅ Funcionalidades ativas:');
   console.log('   • Seleção dinâmica de departamentos via planilha DEPARTAMENTOS');
   console.log('   • Conversação inteligente com IA');
+  console.log('   • Sistema de revisão de chamados antes da abertura');
+  console.log('   • Coleta de informações adicionais e anexos');
   console.log('   • Classificação automática avançada');
   console.log('   • Geração de protocolos únicos');
   console.log('   • Registro na planilha Google Sheets');
@@ -1086,7 +1284,7 @@ async function iniciarBot() {
   console.log('   • Sistema de cadastro e gerenciamento de e-mails dos usuários');
   console.log('   • Cópia automática do solicitante nos e-mails dos chamados');
   console.log('   • Busca dinâmica de e-mails por departamento na aba DEPARTAMENTOS');
-  console.log('🔄 Aguardando mensagens...');
+  console.log('🚀 Aguardando mensagens...');
 }
 
 iniciarBot();
