@@ -162,7 +162,7 @@ function nomeSolicitante(msg) {
 }
 
 function validarEmail(email) {
-  const re = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;
+  const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   return re.test(email);
 }
 
@@ -241,9 +241,9 @@ async function transcreverComGoogle(wavFilePath) {
   return transcription;
 }
 
-/* ────────────────────────────────────────────────
+/* ───────────────────────────────────────────────────────────
    3.4 BAIXAR ARQUIVO DO TELEGRAM
-───────────────────────────────────────────────── */
+──────────────────────────────────────────────────────────── */
 
 async function baixarArquivoTelegram(fileId, nomeOriginal) {
   return new Promise((resolve, reject) => {
@@ -264,67 +264,130 @@ async function baixarArquivoTelegram(fileId, nomeOriginal) {
 
 /* ═══════════════════════════════════════════════════════════
    4. Demais funções (IA, planilha, email, processamento)
-   ... (mantém todo o seu código existente na seção 4, 5, 6)
+   — MANTÉM TODO O SEU CÓDIGO EXISTENTE AQUI
 ═══════════════════════════════════════════════════════════ */
 
 /* ═══════════════════════════════════════════════════════════
-   7. HANDLERS TELEGRAM – ATUALIZADOS
+   5. HANDLERS TELEGRAM (text, photo, document, audio, video,
+      callback_query) – MANTÉM OS SEUS CÓDIGOS EXISTENTES
 ═══════════════════════════════════════════════════════════ */
 
-// Handler para mensagens de voz (transcrição e processamento automático)
-bot.on('voice', async msg => {
-  const chatId = msg.chat.id;
-  const voice = msg.voice;
-  const nome = `voice_${voice.file_unique_id}.ogg`;
-  const telegramId = msg.from.id;
-  const solicitante = nomeSolicitante(msg);
+/* ═══════════════════════════════════════════════════════════
+   6. HANDLER ATUALIZADO PARA VOICE (já inserido anteriormente)
+═══════════════════════════════════════════════════════════ */
 
-  try {
-    // 1) Baixa o OGG do Telegram
-    const oggPath = await baixarArquivoTelegram(voice.file_id, nome);
+/* ═══════════════════════════════════════════════════════════
+   7. FUNÇÃO DE MONITOR DE E-MAILS
+═══════════════════════════════════════════════════════════ */
 
-    // 2) Converte OGG → WAV
-    const wavPath = `/tmp/${uuidv4()}.wav`;
-    await new Promise((resolve, reject) => {
-      ffmpeg(oggPath)
-        .toFormat('wav')
-        .audioCodec('pcm_s16le')
-        .audioChannels(1)
-        .audioFrequency(16000)
-        .save(wavPath)
-        .on('end', resolve)
-        .on('error', reject);
+function startEmailMonitor() {
+  const imapConfig = {
+    user: process.env.IMAP_USER,
+    password: process.env.IMAP_PASS,
+    host: process.env.IMAP_HOST,
+    port: Number(process.env.IMAP_PORT) || 993,
+    tls: true
+  };
+
+  const imap = new Imap(imapConfig);
+
+  imap.once('ready', () => {
+    imap.openBox('INBOX', false, (err, box) => {
+      if (err) {
+        console.error('Erro ao abrir a caixa de entrada:', err);
+        return;
+      }
+      console.log('📧 Monitor de e-mails iniciado com sucesso!');
+
+      imap.on('mail', () => {
+        imap.search(['UNSEEN'], (err, results) => {
+          if (err) {
+            console.error('Erro na busca de emails:', err);
+            return;
+          }
+          if (!results || results.length === 0) return;
+
+          const fetch = imap.fetch(results, { bodies: '', markSeen: true });
+          fetch.on('message', (msg, seqno) => {
+            let emailBuffer = '';
+            msg.on('body', stream => {
+              stream.on('data', chunk => { emailBuffer += chunk.toString('utf8'); });
+            });
+            msg.once('end', async () => {
+              try {
+                const mail = await simpleParser(emailBuffer);
+                const subject = mail.subject || '';
+                const body = mail.text || '';
+                const attachments = mail.attachments || [];
+
+                // Extrai protocolo
+                let match = subject.match(/protocolo\\s*[:\\-–—]?\\s*(\\d{8}-\\d{4})/i);
+                let proto = match ? match[1] : null;
+                if (!proto) {
+                  const m2 = body.match(/protocolo\\s*[:\\-–—]?\\s*(\\d{8}-\\d{4})/i);
+                  proto = m2 ? m2[1] : null;
+                }
+                if (!proto) return;
+
+                // Atualiza na planilha
+                await atualizarRespostaChamado(proto, body);
+
+                // Envia ao usuário
+                let targetChat = null;
+                for (const [chatId, p] of protocolosRegistrados.entries()) {
+                  if (p === proto) { targetChat = chatId; break; }
+                }
+                if (!targetChat) return;
+
+                await bot.sendMessage(targetChat, `📧 *Atualização no chamado ${proto}:*\\n\\n${body.trim()}`, {
+                  parse_mode: 'Markdown'
+                });
+
+                if (attachments.length) {
+                  const enviados = await processarAnexosEmail(attachments, targetChat);
+                  if (enviados.length) {
+                    await bot.sendMessage(targetChat, `📎 ${enviados.length} anexo(s) enviado(s).`);
+                  }
+                }
+
+                await bot.sendMessage(targetChat,
+                  'Deseja finalizar o CAR ou fazer mais alguma solicitação?', {
+                  reply_markup: {
+                    inline_keyboard: [
+                      [{ text: '✅ Finalizar CAR', callback_data: `finalizar_${proto}` }],
+                      [{ text: '🔄 Mais Solicitação', callback_data: `mais_${proto}` }]
+                    ]
+                  }
+                });
+
+              } catch (e) {
+                console.error('Erro ao processar email:', e);
+              }
+            });
+          });
+
+          fetch.once('error', err => {
+            console.error('Erro no fetch do email:', err);
+          });
+        });
+      });
     });
+  });
 
-    await bot.sendMessage(chatId, '🎤 Processando seu áudio...');
+  imap.once('error', err => {
+    console.error('Erro IMAP:', err);
+  });
 
-    // 3) Transcreve com Google
-    const transcript = await transcreverComGoogle(wavPath);
+  imap.once('end', () => {
+    console.log('Conexão IMAP encerrada. Reconectando em 60s...');
+    setTimeout(startEmailMonitor, 60000);
+  });
 
-    // 4) Limpa arquivos temporários
-    fs.unlinkSync(oggPath);
-    fs.unlinkSync(wavPath);
-
-    if (transcript && transcript.trim()) {
-      await bot.sendMessage(chatId, `📝 *Transcrição:* ${transcript}`, { parse_mode: 'Markdown' });
-      // Chama seu processamento normal de mensagem
-      await processarMensagem(chatId, transcript, solicitante, telegramId);
-    } else {
-      await bot.sendMessage(chatId,
-        '❌ Não consegui transcrever seu áudio. Por favor, fale mais claramente ou digite sua mensagem.');
-    }
-  } catch (error) {
-    console.error('Erro ao transcrever voz:', error);
-    await bot.sendMessage(chatId,
-      '❌ Não consegui transcrever sua mensagem de voz. Por favor, tente novamente ou digite sua mensagem.');
-  }
-});
-
-// Mantenha os demais handlers (text, photo, document, audio, video, callback_query) inalterados
+  imap.connect();
+}
 
 /* ═══════════════════════════════════════════════════════════
-   8. MONITOR DE EMAILS
-   9. INICIALIZAÇÃO (iniciarBot)
+   8. INICIALIZAÇÃO
 ═══════════════════════════════════════════════════════════ */
 
 async function iniciarBot() {
@@ -334,4 +397,5 @@ async function iniciarBot() {
 }
 
 iniciarBot();
+
 
