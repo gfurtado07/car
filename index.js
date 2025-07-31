@@ -24,9 +24,9 @@ const speechClient = new SpeechClient({
   credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS)
 });
 
-/* ═══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════
    1. CONFIGURAÇÕES INICIAIS
-═══════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════ */
 
 // PostgreSQL Database
 const dbClient = new Client({
@@ -96,9 +96,9 @@ const PARETO_API_URL = 'https://tess.pareto.io/api';
 const PARETO_TOKEN = process.env.PARETO_API_TOKEN;
 const PARETO_AGENT_ID = process.env.PARETO_AGENT_ID;
 
-/* ═══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════
    2. CATEGORIAS DOS SETORES - TEMPORÁRIO PARA TESTES
-═══════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════ */
 
 const categorias = {
   estoque_logistica: {
@@ -135,9 +135,9 @@ const categorias = {
   }
 };
 
-/* ═══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════
    3. ESTADO, HELPERS, E TRANSCRIÇÃO DE ÁUDIO
-═══════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════ */
 
 const conversasEmAndamento = new Map();
 const anexosDoUsuario = new Map();
@@ -154,7 +154,7 @@ function gerarProtocolo() {
 }
 
 function dataHoraBR() {
-  return new Date().toLocaleString('pt-BR', { 
+  return new Date().toLocaleString('pt-BR', {
     timeZone: 'America/Sao_Paulo', 
     day: '2-digit', month: '2-digit', year: 'numeric',
     hour: '2-digit', minute: '2-digit'
@@ -172,9 +172,9 @@ function validarEmail(email) {
   return re.test(email);
 }
 
-/* ───────────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════
    3.1 FUNÇÕES DO BANCO DE DADOS
-──────────────────────────────────────────────────────────── */
+══════════════════════════════════════════════════════════════ */
 
 async function buscarUsuario(telegramId) {
   try {
@@ -219,9 +219,9 @@ async function atualizarEmailUsuario(telegramId, email) {
   }
 }
 
-/* ───────────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════
    3.2 TRANSCRIÇÃO DE ÁUDIO (GOOGLE CLOUD SPEECH) - CORRIGIDA
-──────────────────────────────────────────────────────────── */
+══════════════════════════════════════════════════════════════ */
 
 async function transcreverComGoogle(wavFilePath) {
   try {
@@ -247,9 +247,9 @@ async function transcreverComGoogle(wavFilePath) {
   }
 }
 
-/* ───────────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════
    3.3 PROCESSAMENTO DE ANEXOS DE E-MAIL
-──────────────────────────────────────────────────────────── */
+══════════════════════════════════════════════════════════════ */
 
 async function processarAnexosEmail(attachments, chatId) {
   const anexosProcessados = [];
@@ -297,9 +297,9 @@ async function processarAnexosEmail(attachments, chatId) {
   return anexosProcessados;
 }
 
-/* ═══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════
    4. COMUNICAÇÃO COM AGENTE IA (PARETO) – CORRIGIDA
-═══════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════ */
 
 function tentarParsearJSON(texto) {
   try {
@@ -374,9 +374,30 @@ async function consultarAgenteIA(mensagemUsuario, contextoConversa = []) {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════
    5. PLANILHA E E-MAIL (FUNCIONALIDADE ATUAL)
-═══════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════ */
+
+// --- Função auxiliar para carregar e-mails de um departamento na planilha ---
+async function buscarEmailsDepartamento(nomeDepartamento) {
+  try {
+    const res = await sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.SHEET_ID,
+      range: `DEPARTAMENTOS!A:B`,    // nome fixo da aba
+    });
+    const linhas = res.data.values || [];
+    const linha = linhas.find(r => r[0] === nomeDepartamento);
+    if (linha && linha[1]) {
+      // caso tenha vários e-mails num mesmo campo, separados por vírgula
+      return linha[1].split(',').map(e => e.trim());
+    }
+    console.warn(`Departamento "${nomeDepartamento}" não encontrado em DEPARTAMENTOS.`);
+    return [];
+  } catch (err) {
+    console.error('Erro ao buscar emails do departamento:', err);
+    return [];
+  }
+}
 
 async function registrarChamado(proto, solicitante, solicitacao, categoria = 'Aguardando Classificação') {
   try {
@@ -499,6 +520,10 @@ async function enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacao
   const cat = categorias[categoriaKey];
   if (!cat) return false;
   
+  // carrega e-mails dinâmicos
+  const deptEmails = await buscarEmailsDepartamento(cat.nome);
+  const toEmails = deptEmails.length ? deptEmails : cat.emails;
+  
   let infoExtra = '';
   if (informacoesColetadas && Object.keys(informacoesColetadas).length > 0) {
     infoExtra = '\n\nInformações coletadas:\n';
@@ -516,7 +541,7 @@ async function enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacao
   
   const mail = {
     from: `"CAR KX3" <${process.env.SMTP_USER}>`,
-    to: cat.emails.join(', '),
+    to: toEmails.join(', '),
     cc: emailSolicitante || '', // Copia o solicitante
     subject: `Novo chamado – Protocolo ${proto} – ${cat.nome}`,
     text: `Olá equipe ${cat.nome},
@@ -547,9 +572,9 @@ KX3 Galtecom`,
   }
 }
 
-/* ═══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════
    6. PROCESSAMENTO PRINCIPAL COM IA – E FALLBACK MANUAL
-═══════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════ */
 
 async function processarMensagem(chatId, texto, solicitante, telegramId) {
   // Comando para atualizar e-mail
@@ -695,9 +720,9 @@ async function processarMensagem(chatId, texto, solicitante, telegramId) {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════
    7. HANDLERS TELEGRAM
-═══════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════ */
 
 // Mensagens de texto
 bot.on('text', async msg => {
@@ -742,7 +767,7 @@ bot.on('document', async msg => {
     const caminho = await baixarArquivoTelegram(doc.file_id, nome);
     if (!anexosDoUsuario.has(chatId)) anexosDoUsuario.set(chatId, []);
     anexosDoUsuario.get(chatId).push(caminho);
-    await bot.sendMessage(chatId, `📎 Documento recebido! Agora me conte sobre sua solicitação.`);
+    await bot.sendMessage(chatId, `📄 Documento recebido! Agora me conte sobre sua solicitação.`);
   } catch (error) {
     console.error('Erro ao processar documento:', error);
     await bot.sendMessage(chatId, '❌ Não consegui processar seu documento. Tente novamente.');
@@ -817,7 +842,7 @@ bot.on('voice', async msg => {
     fs.unlinkSync(wavPath);
 
     if (transcript && transcript.trim()) {
-      await bot.sendMessage(chatId, `📝 *Transcrição:* ${transcript}`, { parse_mode: 'Markdown' });
+      await bot.sendMessage(chatId, `🎯 *Transcrição:* ${transcript}`, { parse_mode: 'Markdown' });
       // Processa a mensagem transcrita automaticamente
       await processarMensagem(chatId, transcript, solicitante, telegramId);
     } else {
@@ -832,16 +857,16 @@ bot.on('voice', async msg => {
 
 // Menu manual (fallback)
 function mostrarMenuCategorias(chatId) {
-  bot.sendMessage(chatId, '🤖 Para prosseguir, selecione o setor mais adequado para sua solicitação:', {
+  bot.sendMessage(chatId, '🤔 Para prosseguir, selecione o setor mais adequado para sua solicitação:', {
     reply_markup: {
       inline_keyboard: [
         [{ text: '📦 Estoque/Logística', callback_data: `manual_estoque_logistica` }],
         [{ text: '💰 Financeiro', callback_data: `manual_financeiro` }],
         [{ text: '🤝 Comercial', callback_data: `manual_comercial` }],
         [{ text: '📢 Marketing', callback_data: `manual_marketing` }],
-        [{ text: '👔 Diretoria', callback_data: `manual_diretoria` }],
+        [{ text: '🏢 Diretoria', callback_data: `manual_diretoria` }],
         [{ text: '🔧 Engenharia', callback_data: `manual_engenharia` }],
-        [{ text: '📊 Faturamento', callback_data: `manual_faturamento` }],
+        [{ text: '📄 Faturamento', callback_data: `manual_faturamento` }],
         [{ text: '🛡️ Garantia', callback_data: `manual_garantia` }]
       ]
     }
@@ -866,7 +891,7 @@ bot.on('callback_query', async q => {
     }
   } else if (data.startsWith('mais_')) {
     const proto = data.replace('mais_', '');
-    await bot.sendMessage(chatId, `🔄 O chamado de protocolo ${proto} permanecerá aberto. Por favor, envie os detalhes adicionais que deseja incluir.`);
+    await bot.sendMessage(chatId, `📝 O chamado de protocolo ${proto} permanecerá aberto. Por favor, envie os detalhes adicionais que deseja incluir.`);
     // O atendimento continua; o usuário poderá enviar novas mensagens que serão anexadas ao mesmo protocolo.
   } else if (data.startsWith('manual_')) {
     const categoriaKey = data.replace('manual_', '');
@@ -902,9 +927,9 @@ bot.on('callback_query', async q => {
   await bot.answerCallbackQuery(q.id);
 });
 
-/* ═══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════
    8. MONITOR DE EMAILS (ATUALIZAÇÕES DE CHAMADOS) - CORRIGIDO
-═══════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════ */
 
 function startEmailMonitor() {
   const imapConfig = {
@@ -955,7 +980,7 @@ function startEmailMonitor() {
                   console.log('Anexos:', attachments.length);
                   
                   // Busca protocolo no assunto com regex mais flexível
-                  let match = subject.match(/protocolo\s*[:\-–—]?\s*(\d{8}-\d{4})/i);
+                  let match = subject.match(/protocolo\s*[:\-––]?\s*(\d{8}-\d{4})/i);
                   let proto = null;
                   
                   if (match) {
@@ -963,7 +988,7 @@ function startEmailMonitor() {
                     console.log('✅ Protocolo encontrado no assunto:', proto);
                   } else {
                     // Tenta buscar no corpo do email
-                    const matchBody = body.match(/protocolo\s*[:\-–—]?\s*(\d{8}-\d{4})/i);
+                    const matchBody = body.match(/protocolo\s*[:\-––]?\s*(\d{8}-\d{4})/i);
                     if (matchBody) {
                       proto = matchBody[1];
                       console.log('✅ Protocolo encontrado no corpo:', proto);
@@ -973,6 +998,12 @@ function startEmailMonitor() {
                   if (proto) {
                     // Atualiza a resposta na planilha
                     await atualizarRespostaChamado(proto, body);
+                    
+                    // NOVA FUNCIONALIDADE: Atualiza status para "Em Andamento"
+                    const mudou = await atualizarStatusChamado(proto, "Em Andamento");
+                    if (!mudou) {
+                      console.warn(`Não foi possível marcar protocolo ${proto} como "Em Andamento" na planilha.`);
+                    }
                     
                     let targetChat = null;
                     // Procura pelo chat que possui esse protocolo
@@ -984,7 +1015,7 @@ function startEmailMonitor() {
                     }
                     
                     if (targetChat) {
-                      console.log('📤 Enviando atualização para chat:', targetChat);
+                      console.log('🤖 Enviando atualização para chat:', targetChat);
                       
                       // Envia a mensagem de resposta
                       await bot.sendMessage(targetChat, `📧 *Atualização no chamado ${proto}:*\n\n${body.trim()}`, {
@@ -1005,7 +1036,7 @@ function startEmailMonitor() {
                         reply_markup: {
                           inline_keyboard: [
                             [{ text: '✅ Finalizar CAR', callback_data: `finalizar_${proto}` }],
-                            [{ text: '🔄 Mais Solicitação', callback_data: `mais_${proto}` }]
+                            [{ text: '📝 Mais Solicitação', callback_data: `mais_${proto}` }]
                           ]
                         }
                       });
@@ -1043,9 +1074,9 @@ function startEmailMonitor() {
   imap.connect();
 }
 
-/* ═══════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════
    9. INICIALIZAÇÃO
-═══════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════ */
 
 async function iniciarBot() {
   await inicializarBancoDados();
@@ -1065,13 +1096,13 @@ async function iniciarBot() {
   console.log('   • Processamento automático de áudios transcritos');
   console.log('   • Fallback manual para abertura de chamados e consulta de protocolo');
   console.log('   • Monitoramento de respostas de e-mail com atualização de chamados');
-  console.log('   • Atualização de status para Finalizado no Google Sheets');
+  console.log('   • Atualização de status para "Em Andamento" e "Finalizado" no Google Sheets');
   console.log('   • Registro automático de respostas na planilha');
   console.log('   • Encaminhamento de anexos de e-mail para o usuário no Telegram');
   console.log('   • Sistema de cadastro e gerenciamento de e-mails dos usuários');
   console.log('   • Cópia automática do solicitante nos e-mails dos chamados');
-  console.log('   • Todos os e-mails temporariamente direcionados para: gfurtado@galtecom.com.br');
-  console.log('📞 Aguardando mensagens...');
+  console.log('   • Busca dinâmica de e-mails por departamento na aba DEPARTAMENTOS');
+  console.log('🔄 Aguardando mensagens...');
 }
 
 iniciarBot();
