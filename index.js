@@ -19,6 +19,11 @@ const { SpeechClient } = require('@google-cloud/speech');
 // Configura o caminho do ffmpeg (importante para Render)
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
+// Configura o SpeechClient com credenciais da variável de ambiente
+const speechClient = new SpeechClient({
+  credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS)
+});
+
 /* ═══════════════════════════════════════════════════════════
    1. CONFIGURAÇÕES INICIAIS
 ═══════════════════════════════════════════════════════════ */
@@ -75,7 +80,7 @@ const sheets = google.sheets({ version: 'v4', auth });
 // Telegram Bot
 const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
 
-// SMTP
+// SMTP - CORREÇÃO AQUI: createTransport (sem "er")
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: Number(process.env.SMTP_PORT),
@@ -215,16 +220,15 @@ async function atualizarEmailUsuario(telegramId, email) {
 }
 
 /* ───────────────────────────────────────────────────────────
-   3.2 TRANSCRIÇÃO DE ÁUDIO (GOOGLE CLOUD SPEECH) - ATUALIZADA
+   3.2 TRANSCRIÇÃO DE ÁUDIO (GOOGLE CLOUD SPEECH) - CORRIGIDA
 ──────────────────────────────────────────────────────────── */
 
 async function transcreverComGoogle(wavFilePath) {
   try {
-    const client = new SpeechClient();
     const fileBytes = fs.readFileSync(wavFilePath);
     const audioBytes = fileBytes.toString('base64');
 
-    const [response] = await client.recognize({
+    const [response] = await speechClient.recognize({
       audio: { content: audioBytes },
       config: {
         encoding: 'LINEAR16',
@@ -1071,5 +1075,3 @@ async function iniciarBot() {
 }
 
 iniciarBot();
-
-
