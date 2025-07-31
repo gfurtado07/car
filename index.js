@@ -8,10 +8,40 @@ const https = require('https');
 const axios = require('axios');
 const Imap = require('node-imap');
 const { simpleParser } = require('mailparser');
+const { Client } = require('pg');
 
 /* ═══════════════════════════════════════════════════════════
    1. CONFIGURAÇÕES INICIAIS
 ═══════════════════════════════════════════════════════════ */
+
+// PostgreSQL Database
+const dbClient = new Client({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
+
+// Conecta ao banco de dados
+async function inicializarBancoDados() {
+  try {
+    await dbClient.connect();
+    console.log('✅ Conectado ao banco de dados PostgreSQL');
+    
+    // Cria a tabela de usuários se não existir
+    await dbClient.query(`
+      CREATE TABLE IF NOT EXISTS usuarios (
+        telegram_id BIGINT PRIMARY KEY,
+        nome VARCHAR(255) NOT NULL,
+        email VARCHAR(255),
+        data_cadastro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        data_atualizacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    
+    console.log('✅ Tabela de usuários verificada/criada');
+  } catch (err) {
+    console.error('❌ Erro ao conectar com o banco de dados:', err);
+  }
+}
 
 // Google Sheets
 let auth;
@@ -98,6 +128,7 @@ const categorias = {
 const conversasEmAndamento = new Map();
 const anexosDoUsuario = new Map();
 const protocolosRegistrados = new Map(); // Armazena o protocolo associado a cada chat
+const aguardandoEmail = new Map(); // Para controle de fluxo de cadastro de e-mail
 
 function gerarProtocolo() {
   const d = new Date();
@@ -122,8 +153,60 @@ function nomeSolicitante(msg) {
          username ? `@${username}` : `User ${msg.from.id}`;
 }
 
+function validarEmail(email) {
+  const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  return re.test(email);
+}
+
 /* ───────────────────────────────────────────────────────────
-   3.1 TRANSCRIÇÃO DE ÁUDIO (GOOGLE CLOUD SPEECH)
+   3.1 FUNÇÕES DO BANCO DE DADOS
+──────────────────────────────────────────────────────────── */
+
+async function buscarUsuario(telegramId) {
+  try {
+    const result = await dbClient.query(
+      'SELECT * FROM usuarios WHERE telegram_id = $1',
+      [telegramId]
+    );
+    return result.rows[0] || null;
+  } catch (err) {
+    console.error('Erro ao buscar usuário:', err);
+    return null;
+  }
+}
+
+async function salvarUsuario(telegramId, nome, email = null) {
+  try {
+    const result = await dbClient.query(
+      `INSERT INTO usuarios (telegram_id, nome, email) 
+       VALUES ($1, $2, $3) 
+       ON CONFLICT (telegram_id) 
+       DO UPDATE SET nome = $2, email = $3, data_atualizacao = CURRENT_TIMESTAMP
+       RETURNING *`,
+      [telegramId, nome, email]
+    );
+    return result.rows[0];
+  } catch (err) {
+    console.error('Erro ao salvar usuário:', err);
+    return null;
+  }
+}
+
+async function atualizarEmailUsuario(telegramId, email) {
+  try {
+    const result = await dbClient.query(
+      'UPDATE usuarios SET email = $1, data_atualizacao = CURRENT_TIMESTAMP WHERE telegram_id = $2 RETURNING *',
+      [email, telegramId]
+    );
+    return result.rows[0] || null;
+  } catch (err) {
+    console.error('Erro ao atualizar e-mail do usuário:', err);
+    return null;
+  }
+}
+
+/* ───────────────────────────────────────────────────────────
+   3.2 TRANSCRIÇÃO DE ÁUDIO (GOOGLE CLOUD SPEECH)
 ──────────────────────────────────────────────────────────── */
 
 async function transcreverAudio(filePath) {
@@ -154,7 +237,7 @@ async function transcreverAudio(filePath) {
 }
 
 /* ───────────────────────────────────────────────────────────
-   3.2 PROCESSAMENTO DE ANEXOS DE E-MAIL
+   3.3 PROCESSAMENTO DE ANEXOS DE E-MAIL
 ──────────────────────────────────────────────────────────── */
 
 async function processarAnexosEmail(attachments, chatId) {
@@ -401,7 +484,7 @@ async function baixarArquivoTelegram(fileId, nomeOriginal) {
   });
 }
 
-async function enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacao, anexos = [], informacoesColetadas = {}) {
+async function enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacao, anexos = [], informacoesColetadas = {}, emailSolicitante = null) {
   const cat = categorias[categoriaKey];
   if (!cat) return false;
   
@@ -420,16 +503,23 @@ async function enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacao
     anexoInfo = `\n\nAnexos enviados: ${anexos.length} arquivo(s)`;
   }
   
+  // Prepara lista de destinatários (setor + solicitante se tiver e-mail)
+  const destinatarios = [...cat.emails];
+  if (emailSolicitante) {
+    destinatarios.push(emailSolicitante);
+  }
+  
   const mail = {
     from: `"CAR KX3" <${process.env.SMTP_USER}>`,
     to: cat.emails.join(', '),
+    cc: emailSolicitante || '', // Copia o solicitante
     subject: `Novo chamado – Protocolo ${proto} – ${cat.nome}`,
     text: `Olá equipe ${cat.nome},
 
 Um novo chamado foi aberto na Central de Atendimento ao Representante.
 
 Protocolo: ${proto}
-Solicitante: ${solicitante}
+Solicitante: ${solicitante}${emailSolicitante ? `\nE-mail: ${emailSolicitante}` : ''}
 Categoria: ${cat.nome}
 Solicitação: ${solicitacao}${infoExtra}${anexoInfo}
 
@@ -444,7 +534,7 @@ KX3 Galtecom`,
   try {
     await transporter.sendMail(mail);
     anexos.forEach(c => fs.unlink(c, err => { if (err) console.error('Erro ao deletar arquivo:', err); }));
-    console.log(`E-mail enviado ao setor: ${cat.nome}`);
+    console.log(`E-mail enviado ao setor: ${cat.nome}${emailSolicitante ? ' (solicitante copiado)' : ''}`);
     return true;
   } catch (err) {
     console.error('Erro ao enviar e-mail:', err);
@@ -456,7 +546,41 @@ KX3 Galtecom`,
    6. PROCESSAMENTO PRINCIPAL COM IA – E FALLBACK MANUAL
 ═══════════════════════════════════════════════════════════ */
 
-async function processarMensagem(chatId, texto, solicitante) {
+async function processarMensagem(chatId, texto, solicitante, telegramId) {
+  // Comando para atualizar e-mail
+  if (/\/email|atualizar\s+e?mail|alterar\s+e?mail|mudar\s+e?mail/i.test(texto)) {
+    aguardandoEmail.set(chatId, 'update');
+    await bot.sendMessage(chatId, '📧 Por favor, digite seu novo endereço de e-mail:');
+    return;
+  }
+  
+  // Se está aguardando e-mail (cadastro ou atualização)
+  if (aguardandoEmail.has(chatId)) {
+    const acao = aguardandoEmail.get(chatId);
+    aguardandoEmail.delete(chatId);
+    
+    if (!validarEmail(texto)) {
+      await bot.sendMessage(chatId, '❌ E-mail inválido. Por favor, digite um e-mail válido (ex: seuemail@exemplo.com):');
+      aguardandoEmail.set(chatId, acao); // Recoloca na fila
+      return;
+    }
+    
+    if (acao === 'cadastro') {
+      // Primeiro cadastro
+      await salvarUsuario(telegramId, solicitante, texto);
+      await bot.sendMessage(chatId, 
+        `✅ E-mail cadastrado com sucesso!\n\n📧 E-mail: ${texto}\n\nAgora você será copiado em todos os e-mails dos seus chamados. Para alterar seu e-mail futuramente, digite "/email".`
+      );
+    } else if (acao === 'update') {
+      // Atualização
+      await atualizarEmailUsuario(telegramId, texto);
+      await bot.sendMessage(chatId, 
+        `✅ E-mail atualizado com sucesso!\n\n📧 Novo e-mail: ${texto}\n\nVocê será copiado nos próximos chamados com este novo e-mail.`
+      );
+    }
+    return;
+  }
+  
   // Se o usuário pergunta pelo protocolo
   if (/qual\s+n(ú|u)mero do protocolo/i.test(texto)) {
     if (protocolosRegistrados.has(chatId)) {
@@ -469,6 +593,22 @@ async function processarMensagem(chatId, texto, solicitante) {
     }
   }
   
+  // Verifica se usuário tem e-mail cadastrado
+  let usuario = await buscarUsuario(telegramId);
+  if (!usuario) {
+    // Primeiro acesso - cadastra o usuário
+    usuario = await salvarUsuario(telegramId, solicitante);
+  }
+  
+  // Se não tem e-mail cadastrado, solicita apenas na primeira abertura de chamado
+  if (!usuario.email && (/abrir\s+(um\s+)?(car|chamado)/i.test(texto) || conversasEmAndamento.has(chatId))) {
+    aguardandoEmail.set(chatId, 'cadastro');
+    await bot.sendMessage(chatId, 
+      `👋 Olá ${solicitante}!\n\nPara que você seja copiado nos e-mails dos seus chamados, preciso do seu endereço de e-mail.\n\n📧 Por favor, digite seu e-mail:`
+    );
+    return;
+  }
+  
   // Se o usuário solicita explicitamente abrir um CAR/chamado
   if (/abrir\s+(um\s+)?(car|chamado)/i.test(texto)) {
     const proto = gerarProtocolo();
@@ -479,7 +619,7 @@ async function processarMensagem(chatId, texto, solicitante) {
     const categoryKey = "engenharia";
     
     await registrarChamado(proto, solicitante, solicitacaoCompleta, categorias[categoryKey].nome);
-    await enviarEmailAbertura(proto, solicitante, categoryKey, solicitacaoCompleta, anexosDoUsuario.get(chatId) || []);
+    await enviarEmailAbertura(proto, solicitante, categoryKey, solicitacaoCompleta, anexosDoUsuario.get(chatId) || [], {}, usuario.email);
     
     await bot.sendMessage(chatId, 
         `✅ *Chamado criado com sucesso!*\n\n📋 Protocolo: *${proto}*\n🏢 Setor: *${categorias[categoryKey].nome}*\n📧 E-mail enviado à equipe responsável.\n\n📱 Guarde este número de protocolo para acompanhar seu chamado.`,
@@ -527,7 +667,7 @@ async function processarMensagem(chatId, texto, solicitante) {
       
       if (cat) {
         await registrarChamado(proto, solicitante, solicitacaoCompleta, cat.nome);
-        await enviarEmailAbertura(proto, solicitante, categoryKey, solicitacaoCompleta, anexos, respostaIA.informacoes_coletadas);
+        await enviarEmailAbertura(proto, solicitante, categoryKey, solicitacaoCompleta, anexos, respostaIA.informacoes_coletadas, usuario.email);
         
         await bot.sendMessage(chatId, 
             `✅ *Chamado criado com sucesso!*\n\n📋 Protocolo: *${proto}*\n🏢 Setor: *${cat.nome}*\n📧 E-mail enviado à equipe responsável.\n\n📱 Guarde este número de protocolo para acompanhar seu chamado.`,
@@ -559,9 +699,10 @@ bot.on('text', async msg => {
   const chatId = msg.chat.id;
   const txt = msg.text;
   const solicitante = nomeSolicitante(msg);
+  const telegramId = msg.from.id;
 
   try {
-    await processarMensagem(chatId, txt, solicitante);
+    await processarMensagem(chatId, txt, solicitante, telegramId);
   } catch (error) {
     console.error('Erro ao processar mensagem:', error);
     await bot.sendMessage(chatId, '❌ Ops! Ocorreu um erro. Tente novamente em alguns minutos.');
@@ -675,6 +816,7 @@ function mostrarMenuCategorias(chatId) {
 bot.on('callback_query', async q => {
   const chatId = q.message.chat.id;
   const data = q.data;
+  const telegramId = q.from.id;
   
   if (data.startsWith('finalizar_')) {
     const proto = data.replace('finalizar_', '');
@@ -698,6 +840,9 @@ bot.on('callback_query', async q => {
     const anexos = anexosDoUsuario.get(chatId) || [];
     
     if (cat) {
+      // Busca o e-mail do usuário
+      const usuario = await buscarUsuario(telegramId);
+      
       const proto = gerarProtocolo();
       protocolosRegistrados.set(chatId, proto);
       const solicitacaoCompleta = conversa
@@ -706,7 +851,7 @@ bot.on('callback_query', async q => {
         .join(' | ') || 'Seleção manual de categoria';
       
       await registrarChamado(proto, solicitante, solicitacaoCompleta, cat.nome);
-      await enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacaoCompleta, anexos);
+      await enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacaoCompleta, anexos, {}, usuario?.email);
       
       await bot.editMessageText(
         `✅ *Chamado criado!*\n\n📋 Protocolo: *${proto}*\n🏢 Setor: *${cat.nome}*\n📧 E-mail enviado à equipe responsável.\n\n📱 Guarde este número de protocolo para acompanhar seu chamado.`,
@@ -866,22 +1011,29 @@ function startEmailMonitor() {
    9. INICIALIZAÇÃO
 ═══════════════════════════════════════════════════════════ */
 
-startEmailMonitor();
+async function iniciarBot() {
+  await inicializarBancoDados();
+  startEmailMonitor();
+  
+  console.log('🤖 Bot CAR KX3 com IA iniciado!');
+  console.log('🧠 Agente IA integrado com Pareto');
+  console.log('💾 Banco de dados PostgreSQL conectado');
+  console.log('✅ Funcionalidades ativas:');
+  console.log('   • Conversação inteligente com IA');
+  console.log('   • Classificação automática avançada');
+  console.log('   • Geração de protocolos únicos');
+  console.log('   • Registro na planilha Google Sheets');
+  console.log('   • Envio de e-mails com anexos do usuário');
+  console.log('   • Suporte a fotos, documentos, áudios e vídeos');
+  console.log('   • Transcrição de mensagens de voz');
+  console.log('   • Fallback manual para abertura de chamados e consulta de protocolo');
+  console.log('   • Monitoramento de respostas de e-mail com atualização de chamados');
+  console.log('   • Atualização de status para Finalizado no Google Sheets');
+  console.log('   • Registro automático de respostas na planilha');
+  console.log('   • Encaminhamento de anexos de e-mail para o usuário no Telegram');
+  console.log('   • Sistema de cadastro e gerenciamento de e-mails dos usuários');
+  console.log('   • Cópia automática do solicitante nos e-mails dos chamados');
+  console.log('📞 Aguardando mensagens...');
+}
 
-console.log('🤖 Bot CAR KX3 com IA iniciado!');
-console.log('🧠 Agente IA integrado com Pareto');
-console.log('✅ Funcionalidades ativas:');
-console.log('   • Conversação inteligente com IA');
-console.log('   • Classificação automática avançada');
-console.log('   • Geração de protocolos únicos');
-console.log('   • Registro na planilha Google Sheets');
-console.log('   • Envio de e-mails com anexos do usuário');
-console.log('   • Suporte a fotos, documentos, áudios e vídeos');
-console.log('   • Transcrição de mensagens de voz');
-console.log('   • Fallback manual para abertura de chamados e consulta de protocolo');
-console.log('   • Monitoramento de respostas de e-mail com atualização de chamados');
-console.log('   • Atualização de status para Finalizado no Google Sheets');
-console.log('   • Registro automático de respostas na planilha');
-console.log('   • Encaminhamento de anexos de e-mail para o usuário no Telegram');
-console.log('📞 Aguardando mensagens...');
-
+iniciarBot();
