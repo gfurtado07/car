@@ -721,13 +721,15 @@ async function processarMensagem(chatId, texto, solicitante, telegramId) {
           'Você pode:\n' +
           '• Enviar fotos, documentos, áudios ou vídeos\n' +
           '• Adicionar mais detalhes por texto\n' +
+          '• Editar a descrição principal\n' +
           '• Ou confirmar a abertura do chamado',
           {
             parse_mode: 'Markdown',
             reply_markup: {
               inline_keyboard: [
                 [{ text: '✅ Abrir Chamado Agora', callback_data: 'confirmar_abertura' }],
-                [{ text: '📝 Adicionar Mais Informações', callback_data: 'adicionar_info' }]
+                [{ text: '📝 Adicionar Mais Informações', callback_data: 'adicionar_info' }],
+                [{ text: '✏️ Editar Descrição Principal', callback_data: 'editar_descricao' }]
               ]
             }
           }
@@ -744,7 +746,8 @@ async function processarMensagem(chatId, texto, solicitante, telegramId) {
             reply_markup: {
               inline_keyboard: [
                 [{ text: '✅ Abrir Chamado Agora', callback_data: 'confirmar_abertura' }],
-                [{ text: '📝 Adicionar Mais Informações', callback_data: 'adicionar_info' }]
+                [{ text: '📝 Adicionar Mais Informações', callback_data: 'adicionar_info' }],
+                [{ text: '✏️ Editar Descrição Principal', callback_data: 'editar_descricao' }]
               ]
             }
           }
@@ -768,12 +771,63 @@ async function processarMensagem(chatId, texto, solicitante, telegramId) {
             reply_markup: {
               inline_keyboard: [
                 [{ text: '✅ Abrir Chamado Agora', callback_data: 'confirmar_abertura' }],
-                [{ text: '📝 Adicionar Mais Informações', callback_data: 'adicionar_info' }]
+                [{ text: '📝 Adicionar Mais Informações', callback_data: 'adicionar_info' }],
+                [{ text: '✏️ Editar Descrição Principal', callback_data: 'editar_descricao' }]
               ]
             }
           }
         );
       }
+      aguardandoEmail.delete(chatId);
+      return;
+    }
+
+    // Estado: aguardando nova descrição (NOVA FUNCIONALIDADE)
+    if (estado.acao === 'aguardando_nova_descricao') {
+      const dadosAtuais = aguardandoRevisao.get(chatId);
+      if (dadosAtuais) {
+        // Substitui a descrição principal
+        dadosAtuais.descricao = texto;
+        aguardandoRevisao.set(chatId, dadosAtuais);
+        
+        // Gera nova revisão
+        const revisao = await consultarAgenteRevisor(dadosAtuais);
+        
+        await bot.sendMessage(chatId, '✅ Descrição atualizada!\n\n📋 *NOVO RESUMO DO CHAMADO*');
+        
+        if (revisao && revisao.resumo_formatado) {
+          await bot.sendMessage(chatId, 
+            revisao.resumo_formatado,
+            { parse_mode: 'Markdown' }
+          );
+
+          if (revisao.sugestoes && revisao.sugestoes.length > 0) {
+            await bot.sendMessage(chatId, 
+              `💡 *Novas sugestões:*\n${revisao.sugestoes.map(s => `• ${s}`).join('\n')}`,
+              { parse_mode: 'Markdown' }
+            );
+          }
+        } else {
+          await bot.sendMessage(chatId, 
+            `🏢 **Departamento:** ${dadosAtuais.departamento}\n📝 **Nova Descrição:** ${texto}\n📎 **Anexos:** ${dadosAtuais.anexos}`,
+            { parse_mode: 'Markdown' }
+          );
+        }
+
+        await bot.sendMessage(chatId, 
+          'Como ficou a nova versão? Deseja fazer mais alterações?',
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: '✅ Abrir Chamado Agora', callback_data: 'confirmar_abertura' }],
+                [{ text: '📝 Adicionar Mais Informações', callback_data: 'adicionar_info' }],
+                [{ text: '✏️ Editar Descrição Novamente', callback_data: 'editar_descricao' }]
+              ]
+            }
+          }
+        );
+      }
+      aguardandoEmail.delete(chatId);
       return;
     }
 
@@ -876,6 +930,11 @@ bot.on('photo', async msg => {
     anexosDoUsuario.get(chatId).push(caminho);
     
     if (aguardandoRevisao.has(chatId)) {
+      // Atualiza os dados do chamado com o novo anexo
+      const dadosAtuais = aguardandoRevisao.get(chatId);
+      dadosAtuais.anexos = anexosDoUsuario.get(chatId).map(a => path.basename(a)).join(', ');
+      aguardandoRevisao.set(chatId, dadosAtuais);
+      
       await bot.sendMessage(chatId, `📸 Foto recebida e adicionada ao chamado!`);
     } else {
       await bot.sendMessage(chatId, `📸 Foto recebida! Digite "abrir chamado" para criar um chamado com este anexo.`);
@@ -898,6 +957,11 @@ bot.on('document', async msg => {
     anexosDoUsuario.get(chatId).push(caminho);
     
     if (aguardandoRevisao.has(chatId)) {
+      // Atualiza os dados do chamado com o novo anexo
+      const dadosAtuais = aguardandoRevisao.get(chatId);
+      dadosAtuais.anexos = anexosDoUsuario.get(chatId).map(a => path.basename(a)).join(', ');
+      aguardandoRevisao.set(chatId, dadosAtuais);
+      
       await bot.sendMessage(chatId, `📄 Documento recebido e adicionado ao chamado!`);
     } else {
       await bot.sendMessage(chatId, `📄 Documento recebido! Digite "abrir chamado" para criar um chamado com este anexo.`);
@@ -920,6 +984,11 @@ bot.on('audio', async msg => {
     anexosDoUsuario.get(chatId).push(caminho);
     
     if (aguardandoRevisao.has(chatId)) {
+      // Atualiza os dados do chamado com o novo anexo
+      const dadosAtuais = aguardandoRevisao.get(chatId);
+      dadosAtuais.anexos = anexosDoUsuario.get(chatId).map(a => path.basename(a)).join(', ');
+      aguardandoRevisao.set(chatId, dadosAtuais);
+      
       await bot.sendMessage(chatId, `🎵 Áudio recebido e adicionado ao chamado!`);
     } else {
       await bot.sendMessage(chatId, `🎵 Áudio recebido! Digite "abrir chamado" para criar um chamado com este anexo.`);
@@ -942,6 +1011,11 @@ bot.on('video', async msg => {
     anexosDoUsuario.get(chatId).push(caminho);
     
     if (aguardandoRevisao.has(chatId)) {
+      // Atualiza os dados do chamado com o novo anexo
+      const dadosAtuais = aguardandoRevisao.get(chatId);
+      dadosAtuais.anexos = anexosDoUsuario.get(chatId).map(a => path.basename(a)).join(', ');
+      aguardandoRevisao.set(chatId, dadosAtuais);
+      
       await bot.sendMessage(chatId, `🎬 Vídeo recebido e adicionado ao chamado!`);
     } else {
       await bot.sendMessage(chatId, `🎬 Vídeo recebido! Digite "abrir chamado" para criar um chamado com este anexo.`);
@@ -999,7 +1073,7 @@ bot.on('voice', async msg => {
   }
 });
 
-// Callback para interações via inline keyboard - ATUALIZADO
+// Callback para interações via inline keyboard - ATUALIZADO COM EDIÇÃO
 bot.on('callback_query', async q => {
   const chatId = q.message.chat.id;
   const data = q.data;
@@ -1093,6 +1167,21 @@ bot.on('callback_query', async q => {
       '• Enviar fotos, documentos, áudios ou vídeos\n' +
       '• Digitar informações adicionais\n\n' +
       'Digite a informação adicional ou envie seus anexos:',
+      { 
+        chat_id: chatId, 
+        message_id: q.message.message_id, 
+        parse_mode: 'Markdown',
+        reply_markup: { inline_keyboard: [] }
+      }
+    );
+  } else if (data === 'editar_descricao') {
+    // NOVA FUNCIONALIDADE: Solicita nova descrição
+    aguardandoEmail.set(chatId, { acao: 'aguardando_nova_descricao' });
+    
+    await bot.editMessageText(
+      '✏️ *Editar Descrição Principal*\n\n' +
+      'Digite a nova descrição para seu chamado.\n\n' +
+      '💡 Esta será a descrição principal que substituirá a anterior:',
       { 
         chat_id: chatId, 
         message_id: q.message.message_id, 
@@ -1263,11 +1352,13 @@ async function iniciarBot() {
   console.log('🤖 Bot CAR KX3 com IA iniciado!');
   console.log('🧠 Agente IA integrado com Pareto');
   console.log('🔍 Agente Revisor de Chamados ativo');
+  console.log('✏️ Sistema de edição de descrição implementado');
   console.log('💾 Banco de dados PostgreSQL conectado');
   console.log('✅ Funcionalidades ativas:');
   console.log('   • Seleção dinâmica de departamentos via planilha DEPARTAMENTOS');
   console.log('   • Conversação inteligente com IA');
   console.log('   • Sistema de revisão de chamados antes da abertura');
+  console.log('   • Edição de descrição principal do chamado');
   console.log('   • Coleta de informações adicionais e anexos');
   console.log('   • Classificação automática avançada');
   console.log('   • Geração de protocolos únicos');
