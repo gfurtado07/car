@@ -83,41 +83,41 @@ const PARETO_TOKEN = process.env.PARETO_API_TOKEN;
 const PARETO_AGENT_ID = process.env.PARETO_AGENT_ID;
 
 /* ═══════════════════════════════════════════════════════════
-   2. CATEGORIAS DOS SETORES
+   2. CATEGORIAS DOS SETORES - TEMPORÁRIO PARA TESTES
 ═══════════════════════════════════════════════════════════ */
 
 const categorias = {
   estoque_logistica: {
     nome: 'Estoque/Logística',
-    emails: ['logistica@galtecom.com.br', 'estoque@galtecom.com.br', 'financeiro@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br']
   },
   financeiro: {
     nome: 'Financeiro',
-    emails: ['contabil@galtecom.com.br', 'contabil.nav@galtecom.com.br', 'financeiro@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br']
   },
   comercial: {
     nome: 'Comercial',
-    emails: ['gfurtado@galtecom.com.br', 'financeiro@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br']
   },
   marketing: {
     nome: 'Marketing',
-    emails: ['marketing@galtecom.com.br', 'marketing.nav@galtecom.com.br', 'gfurtado@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br']
   },
   diretoria: {
     nome: 'Diretoria',
-    emails: ['edson@galtecom.com.br', 'financeiro@galtecom.com.br', 'gfurtado@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br']
   },
   engenharia: {
     nome: 'Engenharia/Desenvolvimento',
-    emails: ['engenharia@galtecom.com.br', 'desenvolvimento@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br']
   },
   faturamento: {
     nome: 'Faturamento',
-    emails: ['adm@galtecom.com.br', 'financeiro@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br']
   },
   garantia: {
     nome: 'Garantia',
-    emails: ['garantia@galtecom.com.br', 'garantia1@galtecom.com.br', 'edson@galtecom.com.br']
+    emails: ['gfurtado@galtecom.com.br']
   }
 };
 
@@ -210,30 +210,35 @@ async function atualizarEmailUsuario(telegramId, email) {
 ──────────────────────────────────────────────────────────── */
 
 async function transcreverAudio(filePath) {
-  // Requer a dependência @google-cloud/speech instalada
-  const speech = require('@google-cloud/speech');
-  const client = new speech.SpeechClient();
+  try {
+    // Requer a dependência @google-cloud/speech instalada
+    const speech = require('@google-cloud/speech');
+    const client = new speech.SpeechClient();
 
-  const file = fs.readFileSync(filePath);
-  const audioBytes = file.toString('base64');
+    const file = fs.readFileSync(filePath);
+    const audioBytes = file.toString('base64');
 
-  const audio = { content: audioBytes };
-  const config = {
-    encoding: 'OGG_OPUS',
-    sampleRateHertz: 48000,
-    languageCode: 'pt-BR'
-  };
+    const audio = { content: audioBytes };
+    const config = {
+      encoding: 'OGG_OPUS',
+      sampleRateHertz: 48000,
+      languageCode: 'pt-BR'
+    };
 
-  const request = {
-    audio: audio,
-    config: config
-  };
+    const request = {
+      audio: audio,
+      config: config
+    };
 
-  const [response] = await client.recognize(request);
-  const transcription = response.results
-    .map(result => result.alternatives[0].transcript)
-    .join('\n');
-  return transcription;
+    const [response] = await client.recognize(request);
+    const transcription = response.results
+      .map(result => result.alternatives[0].transcript)
+      .join('\n');
+    return transcription;
+  } catch (error) {
+    console.error('Erro na transcrição de áudio:', error);
+    throw error;
+  }
 }
 
 /* ───────────────────────────────────────────────────────────
@@ -501,12 +506,6 @@ async function enviarEmailAbertura(proto, solicitante, categoriaKey, solicitacao
   let anexoInfo = '';
   if (anexos.length > 0) {
     anexoInfo = `\n\nAnexos enviados: ${anexos.length} arquivo(s)`;
-  }
-  
-  // Prepara lista de destinatários (setor + solicitante se tiver e-mail)
-  const destinatarios = [...cat.emails];
-  if (emailSolicitante) {
-    destinatarios.push(emailSolicitante);
   }
   
   const mail = {
@@ -778,19 +777,37 @@ bot.on('video', async msg => {
   }
 });
 
-// Handler para mensagens de voz (transcrição)
+// Handler para mensagens de voz (transcrição e processamento automático)
 bot.on('voice', async msg => {
   const chatId = msg.chat.id;
   const voice = msg.voice;
   const nome = `voice_${voice.file_unique_id}.ogg`;
+  const telegramId = msg.from.id;
+  const solicitante = nomeSolicitante(msg);
   
   try {
     const caminho = await baixarArquivoTelegram(voice.file_id, nome);
+    await bot.sendMessage(chatId, `🎤 Processando seu áudio...`);
+    
     const transcript = await transcreverAudio(caminho);
-    await bot.sendMessage(chatId, `📝 Transcrição: ${transcript}`);
+    
+    // Remove o arquivo temporário
+    fs.unlink(caminho, err => { 
+      if (err) console.error('Erro ao deletar arquivo de áudio:', err); 
+    });
+    
+    if (transcript && transcript.trim()) {
+      await bot.sendMessage(chatId, `📝 *Transcrição:* ${transcript}`);
+      
+      // Processa a mensagem transcrita automaticamente
+      await processarMensagem(chatId, transcript, solicitante, telegramId);
+    } else {
+      await bot.sendMessage(chatId, '❌ Não consegui transcrever seu áudio. Tente falar mais claramente ou digite sua mensagem.');
+    }
+    
   } catch (error) {
     console.error('Erro ao transcrever voz:', error);
-    await bot.sendMessage(chatId, '❌ Não consegui transcrever sua mensagem de voz. Tente novamente.');
+    await bot.sendMessage(chatId, '❌ Não consegui transcrever sua mensagem de voz. Por favor, tente novamente ou digite sua mensagem.');
   }
 });
 
@@ -1025,7 +1042,8 @@ async function iniciarBot() {
   console.log('   • Registro na planilha Google Sheets');
   console.log('   • Envio de e-mails com anexos do usuário');
   console.log('   • Suporte a fotos, documentos, áudios e vídeos');
-  console.log('   • Transcrição de mensagens de voz');
+  console.log('   • Transcrição automática de mensagens de voz');
+  console.log('   • Processamento automático de áudios transcritos');
   console.log('   • Fallback manual para abertura de chamados e consulta de protocolo');
   console.log('   • Monitoramento de respostas de e-mail com atualização de chamados');
   console.log('   • Atualização de status para Finalizado no Google Sheets');
@@ -1033,6 +1051,7 @@ async function iniciarBot() {
   console.log('   • Encaminhamento de anexos de e-mail para o usuário no Telegram');
   console.log('   • Sistema de cadastro e gerenciamento de e-mails dos usuários');
   console.log('   • Cópia automática do solicitante nos e-mails dos chamados');
+  console.log('   • Todos os e-mails temporariamente direcionados para: gfurtado@galtecom.com.br');
   console.log('📞 Aguardando mensagens...');
 }
 
