@@ -1,0 +1,80 @@
+// utils/helpers.js
+const { Client } = require('pg');
+const config = require('../config');
+
+let client;
+
+/**
+ * Inicializa a conexão com o PostgreSQL e garante que a tabela 'usuarios' exista.
+ */
+async function inicializarBancoDados() {
+  if (client) return client; // conexão já inicializada
+
+  client = new Client({
+    connectionString: process.env.DATABASE_URL
+  });
+
+  try {
+    await client.connect();
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS usuarios (
+        telegram_id BIGINT PRIMARY KEY,
+        nome TEXT NOT NULL,
+        email TEXT
+      );
+    `);
+    console.log('✅ PostgreSQL conectado e tabela "usuarios" pronta.');
+    return client;
+  } catch (error) {
+    console.error('❌ Erro ao conectar no PostgreSQL:', error);
+    throw error;
+  }
+}
+
+/**
+ * Insere ou atualiza um usuário na tabela 'usuarios'.
+ */
+async function salvarUsuario(telegramId, nome, email = null) {
+  if (!client) await inicializarBancoDados();
+  try {
+    const res = await client.query(
+      `INSERT INTO usuarios (telegram_id, nome, email) 
+       VALUES ($1, $2, $3)
+       ON CONFLICT (telegram_id) 
+       DO UPDATE SET nome = $2, email = COALESCE($3, usuarios.email)
+       RETURNING *;`,
+      [telegramId, nome, email]
+    );
+    return res.rows[0];
+  } catch (error) {
+    console.error('❌ Erro ao salvar usuário:', error);
+    return null;
+  }
+}
+
+/**
+ * Busca um usuário pelo telegram_id.
+ */
+async function buscarUsuario(telegramId) {
+  if (!client) await inicializarBancoDados();
+  try {
+    const res = await client.query(
+      `SELECT * FROM usuarios WHERE telegram_id = $1;`,
+      [telegramId]
+    );
+    return res.rows[0] || null;
+  } catch (error) {
+    console.error('❌ Erro ao buscar usuário:', error);
+    return null;
+  }
+}
+
+module.exports = {
+  inicializarBancoDados,
+  salvarUsuario,
+  buscarUsuario,
+  // exportamos também o client caso precise diretamente
+  client
+};
+
+
