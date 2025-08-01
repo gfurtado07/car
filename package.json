@@ -12,6 +12,7 @@
     "dotenv": "^17.2.1",
     "fluent-ffmpeg": "^2.1.2",
     "googleapis": "^154.1.0",
+    "imap": "^0.8.19",
     "mailparser": "^3.6.5",
     "node-imap": "^0.9.6",
     "node-telegram-bot-api": "^0.66.0",
@@ -20,4 +21,3 @@
     "uuid": "^11.1.0"
   }
 }
-
