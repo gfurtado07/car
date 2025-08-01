@@ -2,7 +2,7 @@ const axios = require('axios');
 const config = require('../config');
 
 /**
- * Envia mensagem para o agente conversacional Pareto com root_id para memória
+ * Envia mensagem para o agente conversacional Pareto com root_id numérico
  */
 async function converse(mensagemUsuario, rootId = null, contextoConversa = []) {
   try {
@@ -12,22 +12,22 @@ async function converse(mensagemUsuario, rootId = null, contextoConversa = []) {
     ];
 
     console.log('🤖 Enviando para agente IA:', mensagemUsuario);
-    if (rootId) {
-      console.log('🧠 Usando root_id para memória:', rootId);
-    }
 
-    // Monta o payload com root_id se disponível
+    // Monta payload base
     const payload = {
-      messages: messages,
-      temperature: 0.7,
+      temperature: 1,
       model: "tess-5",
+      messages: messages,
       tools: "no-tools",
-      wait_execution: true
+      wait_execution: false
     };
 
-    // Adiciona root_id apenas se existir
-    if (rootId) {
-      payload.root_id = rootId;
+    // Adiciona root_id apenas se for um número válido
+    if (rootId !== null && rootId !== undefined && !isNaN(Number(rootId))) {
+      payload.root_id = Number(rootId);
+      console.log('🧠 Enviando root_id:', payload.root_id);
+    } else {
+      console.log('🆕 Primeira conversa - sem root_id');
     }
 
     const response = await axios.post(
@@ -45,10 +45,10 @@ async function converse(mensagemUsuario, rootId = null, contextoConversa = []) {
     if (response.data && response.data.responses && response.data.responses[0]) {
       const output = response.data.responses[0].output;
       
-      // Extrai o root_id da resposta se disponível
+      // Extrai root_id da resposta se disponível
       let novoRootId = null;
-      if (response.data.root_id) {
-        novoRootId = response.data.root_id;
+      if (response.data.root_id && !isNaN(Number(response.data.root_id))) {
+        novoRootId = Number(response.data.root_id);
         console.log('🆔 Novo root_id recebido:', novoRootId);
       }
       

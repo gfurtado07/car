@@ -22,17 +22,49 @@ async function inicializarBancoDados() {
         telegram_id BIGINT PRIMARY KEY,
         nome TEXT NOT NULL,
         email TEXT,
-        root_id TEXT
+        root_id BIGINT
       );
     `);
     
-    // Adiciona coluna root_id se não existir (para tabelas já criadas)
-    await client.query(`
-      ALTER TABLE usuarios 
-      ADD COLUMN IF NOT EXISTS root_id TEXT;
+    // Verifica se a coluna root_id existe e qual seu tipo
+    const colunaInfo = await client.query(`
+      SELECT column_name, data_type 
+      FROM information_schema.columns 
+      WHERE table_name = 'usuarios' AND column_name = 'root_id';
     `);
+
+    if (colunaInfo.rows.length === 0) {
+      // Coluna não existe, cria como BIGINT
+      await client.query(`ALTER TABLE usuarios ADD COLUMN root_id BIGINT;`);
+      console.log('✅ Coluna root_id criada como BIGINT');
+    } else if (colunaInfo.rows[0].data_type === 'text') {
+      // Coluna existe mas é TEXT, converte para BIGINT
+      console.log('🔄 Convertendo coluna root_id de TEXT para BIGINT...');
+      
+      // Primeiro, limpa valores inválidos (não numéricos)
+      await client.query(`
+        UPDATE usuarios 
+        SET root_id = NULL 
+        WHERE root_id IS NOT NULL 
+        AND root_id !~ '^[0-9]+$';
+      `);
+      
+      // Converte o tipo da coluna
+      await client.query(`
+        ALTER TABLE usuarios 
+        ALTER COLUMN root_id TYPE BIGINT 
+        USING CASE 
+          WHEN root_id ~ '^[0-9]+$' THEN root_id::BIGINT 
+          ELSE NULL 
+        END;
+      `);
+      
+      console.log('✅ Coluna root_id convertida para BIGINT com sucesso');
+    } else {
+      console.log('✅ Coluna root_id já existe como BIGINT');
+    }
     
-    console.log('✅ PostgreSQL conectado e tabela "usuarios" pronta com root_id.');
+    console.log('✅ PostgreSQL conectado e tabela "usuarios" pronta com root_id BIGINT.');
     return client;
   } catch (error) {
     console.error('❌ Erro ao conectar no PostgreSQL:', error);
@@ -46,6 +78,9 @@ async function inicializarBancoDados() {
 async function salvarUsuario(telegramId, nome, email = null, rootId = null) {
   if (!client) await inicializarBancoDados();
   try {
+    // Converte rootId para número ou null
+    const rootIdNumber = rootId !== null && rootId !== undefined ? Number(rootId) : null;
+    
     const res = await client.query(
       `INSERT INTO usuarios (telegram_id, nome, email, root_id) 
        VALUES ($1, $2, $3, $4)
@@ -55,7 +90,7 @@ async function salvarUsuario(telegramId, nome, email = null, rootId = null) {
          email = COALESCE($3, usuarios.email),
          root_id = COALESCE($4, usuarios.root_id)
        RETURNING *;`,
-      [telegramId, nome, email, rootId]
+      [telegramId, nome, email, rootIdNumber]
     );
     return res.rows[0];
   } catch (error) {
@@ -70,9 +105,12 @@ async function salvarUsuario(telegramId, nome, email = null, rootId = null) {
 async function atualizarRootId(telegramId, rootId) {
   if (!client) await inicializarBancoDados();
   try {
+    // Converte rootId para número ou null
+    const rootIdNumber = rootId !== null && rootId !== undefined ? Number(rootId) : null;
+    
     const res = await client.query(
       `UPDATE usuarios SET root_id = $1 WHERE telegram_id = $2 RETURNING *;`,
-      [rootId, telegramId]
+      [rootIdNumber, telegramId]
     );
     return res.rows[0] || null;
   } catch (error) {
