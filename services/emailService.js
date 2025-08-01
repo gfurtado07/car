@@ -1,5 +1,6 @@
+// services/emailService.js
 const Imap = require('imap');
-const simpleParser = require('mailparser').simpleParser;
+const { simpleParser } = require('mailparser');
 const config = require('../config');
 
 function startEmailMonitor() {
@@ -8,23 +9,24 @@ function startEmailMonitor() {
     password: config.imapPass,
     host: config.imapHost,
     port: config.imapPort,
-    tls: true
+    tls: true,
+    tlsOptions: { rejectUnauthorized: false }  // permite certificados autoassinados
   };
 
   const imap = new Imap(imapConfig);
 
   imap.once('ready', () => {
-    imap.openBox('INBOX', false, function (err, box) {
+    imap.openBox('INBOX', false, (err, box) => {
       if (err) {
         console.error('Erro ao abrir a caixa de entrada:', err);
         return;
       }
       console.log('📬 Monitor de e-mails iniciado com sucesso!');
-      // Aqui vai sua lógica de monitoramento (para simplificar, mantemos assim por enquanto)
+      // Aqui você pode inserir sua lógica de busca de mensagens
     });
   });
 
-  imap.once('error', err => {
+  imap.once('error', (err) => {
     console.error('Erro IMAP:', err);
   });
 
