@@ -19,7 +19,7 @@ async function converse(mensagemUsuario, rootId = null, contextoConversa = []) {
       model: "tess-5",
       messages: messages,
       tools: "no-tools",
-      wait_execution: false
+      wait_execution: true // IMPORTANTE: mudando para true para aguardar resposta completa
     };
 
     // Adiciona root_id apenas se for um número válido
@@ -30,6 +30,8 @@ async function converse(mensagemUsuario, rootId = null, contextoConversa = []) {
       console.log('🆕 Primeira conversa - sem root_id');
     }
 
+    console.log('📤 Payload enviado:', JSON.stringify(payload, null, 2));
+
     const response = await axios.post(
       `${config.paretoApiUrl}/agents/${config.paretoAgentId}/execute`,
       payload,
@@ -38,9 +40,11 @@ async function converse(mensagemUsuario, rootId = null, contextoConversa = []) {
           'Authorization': `Bearer ${config.paretoToken}`,
           'Content-Type': 'application/json'
         },
-        timeout: 30000
+        timeout: 45000 // Aumentando timeout para 45s
       }
     );
+
+    console.log('📥 Resposta completa da API:', JSON.stringify(response.data, null, 2));
 
     if (response.data && response.data.responses && response.data.responses[0]) {
       const output = response.data.responses[0].output;
@@ -55,7 +59,7 @@ async function converse(mensagemUsuario, rootId = null, contextoConversa = []) {
       console.log('✅ Resposta do agente IA recebida');
       
       return {
-        resposta: output,
+        resposta: output || 'Desculpe, não consegui gerar uma resposta.',
         root_id: novoRootId
       };
     }
@@ -64,6 +68,7 @@ async function converse(mensagemUsuario, rootId = null, contextoConversa = []) {
 
   } catch (error) {
     console.error('❌ Erro ao consultar agente IA:', error.message);
+    console.error('❌ Detalhes do erro:', error.response?.data || error);
     
     // Fallback mantém root_id se houver
     return {
@@ -94,3 +99,4 @@ module.exports = {
   converse,
   tentarParsearJSON
 };
+
