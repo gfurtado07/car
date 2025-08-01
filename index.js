@@ -2,7 +2,7 @@ require('dotenv').config();
 
 const config = require('./config');
 const TelegramBot = require('node-telegram-bot-api');
-const { inicializarBancoDados, salvarUsuario, buscarUsuario } = require('./utils/helpers');
+const { inicializarBancoDados, salvarUsuario, buscarUsuario, atualizarRootId } = require('./utils/helpers');
 const { startEmailMonitor } = require('./services/emailService');
 const iaService = require('./services/iaService');
 
@@ -10,7 +10,7 @@ const iaService = require('./services/iaService');
 setTimeout(() => {
   const bot = new TelegramBot(config.telegramToken, { polling: true });
   
-  // Handler de mensagens de texto com IA
+  // Handler de mensagens de texto com IA e memória conversacional
   bot.on('text', async (msg) => {
     const chatId = msg.chat.id;
     const texto = msg.text;
@@ -20,20 +20,35 @@ setTimeout(() => {
     console.log(`📩 Mensagem recebida: "${texto}" de ${solicitante}`);
 
     try {
-      // Salva usuário no banco
-      await salvarUsuario(telegramId, solicitante);
-
-      // Chama agente conversacional
-      const respostaRaw = await iaService.converse(texto);
+      // Busca usuário existente para pegar root_id
+      let usuario = await buscarUsuario(telegramId);
       
-      // Tenta parsear JSON, se falhar usa texto simples
-      const respostaJSON = iaService.tentarParsearJSON(respostaRaw);
+      if (!usuario) {
+        // Cria novo usuário se não existir
+        usuario = await salvarUsuario(telegramId, solicitante);
+        console.log('👤 Novo usuário criado:', solicitante);
+      }
+
+      // Pega root_id existente (pode ser null para primeira conversa)
+      const rootIdAtual = usuario ? usuario.root_id : null;
+
+      // Chama agente conversacional com root_id
+      const respostaIA = await iaService.converse(texto, rootIdAtual);
+      
+      // Se recebeu novo root_id, atualiza no banco
+      if (respostaIA.root_id && respostaIA.root_id !== rootIdAtual) {
+        await atualizarRootId(telegramId, respostaIA.root_id);
+        console.log('💾 Root_id atualizado no banco para:', solicitante);
+      }
+
+      // Processa resposta (JSON ou texto simples)
+      const respostaJSON = iaService.tentarParsearJSON(respostaIA.resposta);
       
       let respostaFinal;
       if (respostaJSON && respostaJSON.resposta_usuario) {
         respostaFinal = respostaJSON.resposta_usuario;
       } else {
-        respostaFinal = respostaRaw;
+        respostaFinal = respostaIA.resposta;
       }
 
       await bot.sendMessage(chatId, respostaFinal);
@@ -41,7 +56,7 @@ setTimeout(() => {
 
     } catch (error) {
       console.error('❌ Erro ao processar mensagem:', error);
-      await bot.sendMessage(chatId, '❌ Desculpe, ocorreu um erro ao processar sua mensagem. Tente novamente.');
+      await bot.sendMessage(chatId, '⚠️ Desculpe, ocorreu um erro ao processar sua mensagem. Tente novamente.');
     }
   });
 
@@ -58,10 +73,11 @@ setTimeout(() => {
       await inicializarBancoDados();
       startEmailMonitor();
 
-      console.log('🤖 Bot CAR KX3 com IA iniciado!');
-      console.log('🚀 Integrado com Pareto AI');
+      console.log('🤖 Bot CAR KX3 com IA e Memória iniciado!');
+      console.log('🧠 Sistema de root_id ativo para memória conversacional');
+      console.log('🔗 Integrado com Pareto AI');
       console.log('🗄️ Banco de dados PostgreSQL conectado');
-      console.log('⌛ Aguardando mensagens...');
+      console.log('⏳ Aguardando mensagens...');
     } catch (error) {
       console.error('❌ Erro ao iniciar o Bot:', error);
     }
